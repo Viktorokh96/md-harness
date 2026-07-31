@@ -46,8 +46,8 @@ from tree_engine import (
 MIND_MAP_TEMPLATE = """\
 # CONTROL ROOM
 
-> `*` сообщение · `[*]` ответ · `*[hide]` скрыть ветку · `[*][hide]` скрыть ответ
-> Отступ 2 пробела = вложенность · скрытые ветки — в `.graph.json`
+> `*` сообщение · `[*]` ответ · `*[hide]` скрыть · `*[archive]` архивировать · `*[archive: причина]`
+> Отступ 2 пробела = вложенность · скрытые/архивные ветки — в `.graph.json` / `archive/`
 
 ----
 
@@ -103,14 +103,25 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
         save_graph(md_tree, md_path)
         return md_text
 
+    # Detect archive/unarchive before merge
+    old_archived = {n.id for n in full.all_nodes() if n.archived}
+
     merged = merge_md_into_graph(full, md_tree)
     save_graph(merged, md_path)
 
-    block = serialize_mindmap(merged)
-    new_content = replace_block(md_text, block)
-    ctx.file_path.write_text(new_content)
-    return new_content
-
+    # Handle [archive] changes
+    from archiver import archive_branch, restore_branch
+    for node in merged.all_nodes():
+        if node is merged.root:
+            continue
+        if node.archived and node.children:
+            # Newly archived — detach children via archiver
+            print(f"[watcher] Archiving branch {node.id}...")
+            archive_branch(md_path, node.id, node.archive_reason)
+        elif not node.archived and node.id in old_archived:
+            # Unarchived — restore from archive/
+            print(f"[watcher] Restoring branch {node.id}...")
+            restore_branch(md_path, node.id)
 
 # ── Run ─────────────────────────────────────────────────────────────────────
 
