@@ -267,8 +267,11 @@ Start your reply content with one of these:
 - Use `delegate_task` for multi-step work.
 - Use `find_nodes` to search for topics before replying.
 - After adding your reply, you can add more replies or call `stay_silent()`.
+- **CRITICAL**: If the user asks for N separate responses/branches, you MUST
+  call `add_reply()` N times — one call per branch. NEVER write multiple
+  ideas in a single `add_reply()` call. Each idea = its own `add_reply()`.
+  Do NOT claim "создано N веток" unless you actually called add_reply N times.
 """
-
 
 def create_agent(model: str | None = None) -> Agent[ControlRoomContext]:
     """Create the CONTROL ROOM agent instance."""
