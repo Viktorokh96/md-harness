@@ -14,6 +14,7 @@ from tree_engine import (
     TAG_RE,
     MindNode,
     MindTree,
+    diff_trees,
     graph_path,
     load_graph,
     merge_md_into_graph,
@@ -203,51 +204,52 @@ class TestJsonRoundTrip:
 # ── Hide-only diff detection ────────────────────────────────────────────────
 
 
-class TestHideOnlyDiff:
-    """Tests for _is_hide_only_diff in watcher.py."""
+class TestDiffTrees:
+    """Tests for diff_trees — tree-based structural comparison."""
 
-    @pytest.fixture(autouse=True)
-    def _import_watcher(self) -> None:
-        import importlib.util
-        import sys
-        spec = importlib.util.spec_from_file_location(
-            "watcher_test", "watcher.py"
-        )
-        self.watcher = importlib.util.module_from_spec(spec)
-        sys.modules["watcher_test"] = self.watcher
-        spec.loader.exec_module(self.watcher)
+    def test_hide_toggle_no_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n* Q\n"))
+        new = parse_mindmap(_md("root: R\n*[hide] Q\n"))
+        has_change, diff_text = diff_trees(old, new)
+        assert not has_change, f"Hide toggle should not be content change, got: {diff_text}"
+        assert "Hidden:" in diff_text or "hidden" in diff_text.lower()
 
-    def test_hide_added(self) -> None:
-        old = '# H\n\n```agentsmindmap\nroot: R\n* Q\n```\n'
-        new = '# H\n\n```agentsmindmap\nroot: R\n*[hide] Q\n```\n'
-        assert self.watcher._is_hide_only_diff(old, new)
+    def test_unhide_no_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n*[hide] Q\n"))
+        new = parse_mindmap(_md("root: R\n* Q\n"))
+        has_change, _ = diff_trees(old, new)
+        assert not has_change  # unhiding alone = no LLM needed (children in .graph.json)
 
-    def test_hide_removed(self) -> None:
-        old = '# H\n\n```agentsmindmap\nroot: R\n*[hide] Q\n```\n'
-        new = '# H\n\n```agentsmindmap\nroot: R\n* Q\n```\n'
-        assert self.watcher._is_hide_only_diff(old, new)
+    def test_new_node_is_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n* Q1\n"))
+        new = parse_mindmap(_md("root: R\n* Q1\n* Q2\n"))
+        has_change, diff_text = diff_trees(old, new)
+        assert has_change
+        assert "New nodes" in diff_text
 
-    def test_new_content_not_hide_only(self) -> None:
-        old = '# H\n\n```agentsmindmap\nroot: R\n* Q1\n```\n'
-        new = '# H\n\n```agentsmindmap\nroot: R\n* Q1\n* Q2\n```\n'
-        assert not self.watcher._is_hide_only_diff(old, new)
+    def test_content_change_detected(self) -> None:
+        old = parse_mindmap(_md("root: R\n* Hello\n"))
+        new = parse_mindmap(_md("root: R\n* World\n"))
+        has_change, diff_text = diff_trees(old, new)
+        assert has_change
+        assert "changed" in diff_text.lower() or "Content" in diff_text
 
-    def test_content_change_not_hide_only(self) -> None:
-        old = '# H\n\n```agentsmindmap\nroot: R\n* Hello\n```\n'
-        new = '# H\n\n```agentsmindmap\nroot: R\n* World\n```\n'
-        assert not self.watcher._is_hide_only_diff(old, new)
-
-    def test_identical_not_hide_only(self) -> None:
-        text = '# H\n\n```agentsmindmap\nroot: R\n* Q\n```\n'
-        assert not self.watcher._is_hide_only_diff(text, text)
+    def test_identical_no_change(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Q\n"))
+        has_change, diff_text = diff_trees(tree, tree)
+        assert not has_change
 
     def test_agent_hide_toggle(self) -> None:
-        old = '# H\n\n```agentsmindmap\nroot: R\n  [*] Reply\n```\n'
-        new = '# H\n\n```agentsmindmap\nroot: R\n  [*][hide] Reply\n```\n'
-        assert self.watcher._is_hide_only_diff(old, new)
+        old = parse_mindmap(_md("root: R\n[*][hide] Reply\n"))
+        new = parse_mindmap(_md("root: R\n[*] Reply\n"))
+        has_change, _ = diff_trees(old, new)
+        assert not has_change
 
-
-# ── Graph sync ──────────────────────────────────────────────────────────────
+    def test_hide_with_children_no_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
+        new = parse_mindmap(_md("root: R\n*[hide] Q\n  [*] A\n"))
+        has_change, _ = diff_trees(old, new)
+        assert not has_change  # only hidden flag changed, children still there in tree
 
 
 class TestGraphSync:

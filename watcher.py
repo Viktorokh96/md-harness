@@ -3,9 +3,10 @@
 CONTROL ROOM watcher — monitors CONTROL_ROOM.md for changes.
 
 On each change:
-1. Sync .md → .graph.json (merge new nodes, [hide] toggles)
-2. If change is [hide]-only → process locally (no LLM call)
-3. Otherwise → run LLM agent
+1. Parse old and new trees
+2. Sync .md → .graph.json (merge new nodes, [hide] toggles)
+3. Compare trees structurally: if only [hide] flags changed → skip LLM
+4. Otherwise → run LLM agent with structural diff
 
 The .md file is a VIEW into the full tree stored in .graph.json.
 Hidden subtrees exist only in .graph.json.
@@ -13,7 +14,6 @@ Hidden subtrees exist only in .graph.json.
 
 import argparse
 import os
-import re
 import time
 from pathlib import Path
 
@@ -32,11 +32,11 @@ if ENV_FILE.exists():
 from agent import (
     CONTROL_ROOM,
     ControlRoomContext,
-    compute_diff,
     create_agent,
     process_change,
 )
 from tree_engine import (
+    diff_trees,
     load_graph,
     merge_md_into_graph,
     parse_mindmap,
@@ -57,7 +57,7 @@ THINKING_MARKER = "[*] ...thinking..."
 # ── Placeholder ─────────────────────────────────────────────────────────────
 
 
-def _append_placeholder(ctx: ControlRoomContext, _user_content: str = "") -> str:
+def _append_placeholder(ctx: ControlRoomContext) -> str:
     """Write [*] ...thinking... as temporary visual feedback."""
     content = ctx.file_path.read_text()
     if THINKING_MARKER in content:
@@ -79,76 +79,15 @@ def _remove_thinking_markers(ctx: ControlRoomContext) -> str:
     return result
 
 
-# ── Hide-only diff detection ────────────────────────────────────────────────
-
-
-def _is_hide_only_diff(old: str, new: str) -> bool:
-    """Check if diff only changes [hide] markers — no content additions."""
-    if old == new:
-        return False
-
-    old_lines = set(old.splitlines())
-    new_lines = set(new.splitlines())
-
-    added = new_lines - old_lines
-    removed = old_lines - new_lines
-
-    if not added and not removed:
-        return False
-
-    for line in added | removed:
-        if not line.strip():
-            continue
-        counterpart = _find_counterpart(line, added | removed)
-        if not _is_hide_toggle(line, counterpart):
-            return False
-
-    return True
-
-
-def _is_hide_toggle(a: str, b: str | None) -> bool:
-    """Check if two lines differ only by [hide] presence."""
-    if b is not None:
-        return a.replace("[hide]", "").strip() == b.replace("[hide]", "").strip()
-    return "[hide]" in a and (
-        a.strip().startswith("*[hide] ") or a.strip().startswith("[*][hide] ")
-    )
-
-
-def _find_counterpart(line: str, all_lines: set[str]) -> str | None:
-    """Find the counterpart line (with/without [hide]) in the set."""
-    without = line.replace("[hide]", "")
-    with_hide = _insert_hide(line)
-    if without in all_lines and without != line:
-        return without
-    if with_hide in all_lines and with_hide != line:
-        return with_hide
-    # Try prefix variations
-    for cand in all_lines:
-        if cand.replace("[hide]", "").strip() == line.replace("[hide]", "").strip() and cand != line:
-            return cand
-    return None
-
-
-def _insert_hide(line: str) -> str:
-    """Insert [hide] after the tag marker."""
-    stripped = line.strip()
-    indent = line[:len(line) - len(stripped)]
-    if stripped.startswith("[*] ") and "[hide]" not in stripped:
-        return f"{indent}[*][hide] {stripped[4:]}"
-    if stripped.startswith("* ") and "[hide]" not in stripped:
-        return f"{indent}*[hide] {stripped[2:]}"
-    return line
-
-
 # ── Graph sync ──────────────────────────────────────────────────────────────
 
 
-def _sync_graph(ctx: ControlRoomContext) -> None:
-    """Sync .md changes into .graph.json.
+def _sync_graph(ctx: ControlRoomContext) -> str:
+    """Sync .md changes into .graph.json. Returns the new .md content.
 
-    - First run: create .graph.json from .md
-    - Subsequent runs: merge .md changes into full graph
+    Side effects:
+    - Creates/updates .graph.json
+    - May rewrite .md (hidden children removed, structure normalized)
     """
     md_path = str(ctx.file_path)
     md_text = ctx.file_path.read_text()
@@ -156,17 +95,20 @@ def _sync_graph(ctx: ControlRoomContext) -> None:
     try:
         md_tree = parse_mindmap(md_text)
     except ValueError:
-        return  # No valid block yet
+        return md_text  # No valid block yet — don't touch
 
     full = load_graph(md_path)
     if full is None:
         save_graph(md_tree, md_path)
-    else:
-        merged = merge_md_into_graph(full, md_tree)
-        save_graph(merged, md_path)
-        block = serialize_mindmap(merged)
-        new_content = replace_block(md_text, block)
-        ctx.file_path.write_text(new_content)
+        return md_text
+
+    merged = merge_md_into_graph(full, md_tree)
+    save_graph(merged, md_path)
+
+    block = serialize_mindmap(merged)
+    new_content = replace_block(md_text, block)
+    ctx.file_path.write_text(new_content)
+    return new_content
 
 
 # ── Run ─────────────────────────────────────────────────────────────────────
@@ -180,37 +122,60 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
         print(f"[watcher] Created {fpath.name}")
         return
 
-    content = fpath.read_text()
-    context_lines = content.splitlines()[-60:]
-    diff = compute_diff(ctx.last_content, content)
+    new_content = fpath.read_text()
+    old_content = ctx.last_content or ""
 
+    # Parse trees for structural comparison
+    try:
+        old_tree = parse_mindmap(old_content) if old_content else None
+        new_tree = parse_mindmap(new_content)
+    except ValueError:
+        print("[watcher] Could not parse mindmap block — skipping.")
+        return
+
+    # Sync .md → .graph.json (may rewrite .md)
+    synced_content = _sync_graph(ctx)
+    ctx.last_content = synced_content
+    ctx.last_mtime = fpath.stat().st_mtime
+
+    # Compare trees structurally
+    has_change = False
+    diff_text = ""
+    if old_tree is not None:
+        has_change, diff_text = diff_trees(old_tree, new_tree)
+    else:
+        has_change = len(new_tree.all_nodes()) > 1  # more than just root
+        if has_change:
+            diff_text = f"Initial tree with {len(new_tree.all_nodes())} nodes."
+
+    # Show context
+    context_lines = synced_content.splitlines()[-40:]
     print(f"[watcher] Processing {fpath.name} ({len(context_lines)} lines)...")
-    for ln in context_lines[:10]:
+    for ln in context_lines[:8]:
         print(f"  | {ln}")
-    if len(context_lines) > 10:
-        print(f"  ... ({len(context_lines) - 10} more lines)")
+    if len(context_lines) > 8:
+        print(f"  ... ({len(context_lines) - 8} more lines)")
 
-    if diff and diff != "(no visible changes)":
-        print(f"\n[watcher] Diff:\n{diff}")
+    if diff_text:
+        print(f"\n[watcher] Diff:\n{diff_text}")
 
     if dry_run:
         print("[watcher] Dry run — skipping agent call.")
         return
 
-    _sync_graph(ctx)
-
-    if _is_hide_only_diff(ctx.last_content, content):
-        print("[watcher] [hide]-only change — processing locally (no LLM).")
-        ctx.last_content = content
-        ctx.last_mtime = fpath.stat().st_mtime
+    if not has_change:
+        print("[watcher] No content change (hide-only or identical) — skipping LLM.")
         return
 
-    _append_placeholder(ctx, content)
+    _append_placeholder(ctx)
     print("[watcher] Running agent...")
-    result = process_change(agent, ctx, diff, context_lines)
+    result = process_change(agent, ctx, diff_text, context_lines)
     print(f"[watcher] Agent finished: {result[:300]}")
 
     _remove_thinking_markers(ctx)
+    # Re-read synced content after agent modified files
+    ctx.last_content = fpath.read_text()
+    ctx.last_mtime = fpath.stat().st_mtime
 
 
 def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False, interval: float = 2.0) -> None:
@@ -239,8 +204,8 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False, interval
                 content = fpath.read_text()
                 if content != ctx.last_content:
                     run_once(agent, ctx, dry_run=dry_run)
-                    ctx.last_content = content
-                    ctx.last_mtime = mtime
+                else:
+                    ctx.last_mtime = mtime  # touched but same content
 
             time.sleep(interval)
         except KeyboardInterrupt:

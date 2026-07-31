@@ -400,9 +400,63 @@ def _reindex(node: MindNode, index: dict[str, MindNode]) -> None:
         _reindex(child, index)
 
 
+def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
+    """Compare two trees structurally. Returns (has_content_change, diff_text).
+
+    Content change = new nodes or changed content.
+    Toggling hidden flag or unhiding is NOT a content change — no LLM needed.
+    """
+    new_nodes: list[str] = []
+    changed_nodes: list[str] = []
+    unhidden_nodes: list[str] = []
+    hidden_nodes: list[str] = []
+
+    def _compare(old_node: MindNode | None, new_node: MindNode | None, path: str) -> None:
+        if old_node is None and new_node is not None:
+            tag = "*" if new_node.is_user else "[*]"
+            h = "[hide]" if new_node.hidden else ""
+            new_nodes.append(f"  {tag}{h} {new_node.content}  [id: {new_node.id}]")
+            for child in new_node.children:
+                _compare(None, child, f"{path}/{new_node.id}")
+            return
+        if new_node is None or old_node is None:
+            return
+
+        if old_node.content != new_node.content:
+            tag = "*" if new_node.is_user else "[*]"
+            changed_nodes.append(
+                f"  [{new_node.id}] changed: {old_node.content[:60]!r} → {new_node.content[:60]!r}"
+            )
+
+        if old_node.hidden and not new_node.hidden:
+            unhidden_nodes.append(f"  [{new_node.id}] unhidden: {new_node.content[:60]}")
+        elif not old_node.hidden and new_node.hidden:
+            hidden_nodes.append(f"  [{new_node.id}] hidden: {new_node.content[:60]}")
+
+        old_kids = {c.id: c for c in old_node.children}
+        new_kids = {c.id: c for c in new_node.children}
+        for child_id in new_kids:
+            _compare(old_kids.get(child_id), new_kids[child_id], f"{path}/{child_id}")
+
+    _compare(old.root, new.root, "")
+
+    has_content_change = bool(new_nodes or changed_nodes)
+
+    parts: list[str] = []
+    if new_nodes:
+        parts.append("New nodes:\n" + "\n".join(new_nodes))
+    if changed_nodes:
+        parts.append("Content changed:\n" + "\n".join(changed_nodes))
+    if unhidden_nodes:
+        parts.append("Unhidden:\n" + "\n".join(unhidden_nodes))
+    if hidden_nodes:
+        parts.append("Hidden:\n" + "\n".join(hidden_nodes))
+
+    diff_text = "\n".join(parts) if parts else "(no structural changes)"
+    return has_content_change, diff_text
+
+
 # ── Renderer ────────────────────────────────────────────────────────────────
-
-
 def render_tree(tree: MindTree) -> str:
     """Render tree as a compact ASCII outline for display."""
     return tree.to_outline()
