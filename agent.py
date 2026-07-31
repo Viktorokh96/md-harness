@@ -1,0 +1,364 @@
+"""
+CONTROL ROOM agent — built on OpenAI Agents SDK.
+
+Tree-based mind map with ```agentsmindmap blocks.
+Tools: read_mindmap, add_reply, find_nodes, stay_silent,
+        run_shell, read_file, delegate_task (Worker).
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from agents import Agent, RunContextWrapper, Runner, function_tool, set_tracing_disabled
+
+from tree_engine import (
+    MindTree,
+    parse_mindmap,
+    replace_block,
+    serialize_mindmap,
+)
+
+# ── Setup ───────────────────────────────────────────────────────────────────
+
+if os.environ.get("DISABLE_TRACING", "1") != "0":
+    set_tracing_disabled(True)
+
+CONTROL_ROOM = Path(__file__).resolve().parent / "CONTROL_ROOM.md"
+MINDMAP_TEMPLATE = """\
+# CONTROL ROOM
+
+```agentsmindmap
+root: CONTROL ROOM
+```
+"""
+
+
+# ── Context ─────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ControlRoomContext:
+    """Context passed through the agent run."""
+
+    file_path: Path = field(default_factory=lambda: CONTROL_ROOM)
+    last_content: str = ""
+    last_mtime: float = 0.0
+
+
+# ── Tree helpers ────────────────────────────────────────────────────────────
+
+
+def _read_tree(ctx: ControlRoomContext) -> MindTree:
+    """Parse the mindmap tree from the context's file."""
+    content = ctx.file_path.read_text()
+    return parse_mindmap(content)
+
+
+def _write_tree(ctx: ControlRoomContext, tree: MindTree) -> None:
+    """Serialize tree back into the file."""
+    content = ctx.file_path.read_text()
+    block = serialize_mindmap(tree)
+    new_content = replace_block(content, block)
+    ctx.file_path.write_text(new_content)
+
+
+# ── Tools ───────────────────────────────────────────────────────────────────
+
+
+@function_tool
+def read_mindmap(wrapper: RunContextWrapper[ControlRoomContext]) -> str:
+    """Read the full mind map tree with node IDs.
+
+    Returns an indented outline where each line shows:
+      📌 [root] Room Name
+        * [node_id] user message
+          [*] [node_id] agent reply
+
+    Use this at the start of every turn to see the current tree state
+    and find the node IDs you need for `add_reply`.
+    """
+    tree = _read_tree(wrapper.context)
+    return tree.to_outline()
+
+
+@function_tool
+def add_reply(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    parent_id: str,
+    content: str,
+) -> str:
+    """Add a reply node under `parent_id` in the tree. Saves to file.
+
+    Args:
+        parent_id: The node ID to reply to (e.g. "root.1" or "root.1.1.1").
+                   Get IDs from `read_mindmap()`.
+        content: The reply text. The author tag (* or [*]) is added
+                 automatically based on the agent calling this.
+    """
+    tree = _read_tree(wrapper.context)
+    tree.add_reply(parent_id, content, author="agent")
+    _write_tree(wrapper.context, tree)
+    return f"Added agent reply under {parent_id}: {content}"
+
+
+@function_tool
+def find_nodes(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    query: str,
+) -> str:
+    """Search the mind map tree for nodes containing `query` (case-insensitive).
+
+    Returns matching nodes with their IDs and paths.
+
+    Args:
+        query: Substring to search for in node content.
+    """
+    tree = _read_tree(wrapper.context)
+    results = tree.find_nodes(query)
+    if not results:
+        return f"No nodes found matching: {query}"
+    lines = []
+    for node in results:
+        path = " → ".join(node.path())
+        tag = "*" if node.is_user else "[*]"
+        lines.append(f"  [{node.id}] {tag} {node.content}  (path: {path})")
+    return "\n".join(lines)
+
+
+@function_tool
+def stay_silent() -> str:
+    """Choose to say nothing. Call this when no response is needed."""
+    return "SILENT — no response needed."
+
+
+@function_tool
+def run_shell(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    command: str,
+    *,
+    timeout: int = 30,
+) -> str:
+    """Execute a shell command. Returns stdout/stderr/exit code."""
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True,
+            timeout=timeout, cwd=wrapper.context.file_path.parent,
+        )
+        out = result.stdout.strip()
+        err = result.stderr.strip()
+        parts = []
+        if out:
+            parts.append(out)
+        if err:
+            parts.append(f"[stderr]\n{err}")
+        if result.returncode != 0:
+            parts.append(f"[exit code: {result.returncode}]")
+        return "\n".join(parts) if parts else "(no output)"
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after {timeout}s"
+
+
+@function_tool
+def read_file(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    filepath: str,
+    *,
+    max_lines: int = 200,
+) -> str:
+    """Read a project file. Path is relative to project root."""
+    root = wrapper.context.file_path.parent
+    target = (root / filepath).resolve()
+    if not str(target).startswith(str(root)):
+        return f"ERROR: path escapes project root: {filepath}"
+    if not target.exists():
+        return f"ERROR: file not found: {filepath}"
+    try:
+        content = target.read_text()
+        lines = content.splitlines()
+        if len(lines) > max_lines:
+            head = "\n".join(lines[:max_lines])
+            return f"{head}\n\n... (truncated, {len(lines)} total lines, showing first {max_lines})"
+        return content
+    except Exception as exc:
+        return f"ERROR reading {filepath}: {exc}"
+
+
+# ── Worker sub-agent ────────────────────────────────────────────────────────
+
+WORKER_INSTRUCTIONS = """\
+You are a Worker sub-agent — a general-purpose task executor.
+You receive tasks from the CONTROL ROOM agent and execute them.
+
+You have access to:
+- `run_shell` — execute shell commands in the project
+- `read_file` — read any file in the project
+
+Rules:
+- Be thorough: explore, verify, and report findings clearly.
+- If a task requires multiple steps, do them in order.
+- Report results concisely — the main agent will decide what to show the user.
+- Never modify CONTROL_ROOM.md — only the main agent does that.
+- Return your final answer as a plain text summary.
+"""
+
+
+def _create_worker(model: str) -> Agent[ControlRoomContext]:
+    return Agent[ControlRoomContext](
+        name="Worker",
+        instructions=WORKER_INSTRUCTIONS,
+        tools=[run_shell, read_file],
+        model=model,
+    )
+
+
+def _make_worker_tool(model: str):
+    worker = _create_worker(model)
+    return worker.as_tool(
+        tool_name="delegate_task",
+        tool_description=(
+            "Delegate a task to a Worker sub-agent. "
+            "Use for multi-step work: researching code, running commands, "
+            "checking facts, exploring the project. "
+            "The worker has shell and file-read access. "
+            "Give it a clear, self-contained task description."
+        ),
+    )
+
+
+# ── Agent definition ────────────────────────────────────────────────────────
+
+INSTRUCTIONS = """\
+You are the CONTROL ROOM agent — an AI operating on a tree-structured mind map
+stored in a ```agentsmindmap markdown block.
+
+## How it works
+The mind map is a TREE with node IDs. Every turn:
+1. Call `read_mindmap()` to see the full tree with IDs.
+2. Find the node you want to reply to (usually the latest user message).
+3. Call `add_reply(parent_id, content)` to add your response as a child node.
+4. Or call `stay_silent()` if no response is needed.
+
+## Node format
+- `*` nodes = user messages
+- `[*]` nodes = your (agent) messages
+- Node IDs look like `root.1`, `root.1.1`, `root.1.1.1`
+- To reply to a node, use its ID in `add_reply(parent_id, ...)`
+
+## Prefix icons for your replies
+Start your reply content with one of these:
+- (no icon) — analysis, thought, observation
+- ❓ — question for the user
+- ▶ — action taken (shell command, file read, etc.)
+- ✅ — task completed, decision made, fact confirmed
+
+## Rules
+- ALWAYS call `read_mindmap()` first to see the current state.
+- Reply to the latest user message unless the user explicitly addresses
+  an earlier topic — then use `find_nodes(query)` to locate it.
+- Be concise: 1-3 lines per reply.
+- Use `run_shell` and `read_file` to explore the codebase.
+- Use `delegate_task` for multi-step work.
+- Use `find_nodes` to search for topics before replying.
+- After adding your reply, you can add more replies or call `stay_silent()`.
+"""
+
+
+def create_agent(model: str | None = None) -> Agent[ControlRoomContext]:
+    """Create the CONTROL ROOM agent instance."""
+    return Agent[ControlRoomContext](
+        name="ControlRoom",
+        instructions=INSTRUCTIONS,
+        tools=[
+            read_mindmap,
+            add_reply,
+            find_nodes,
+            stay_silent,
+            run_shell,
+            read_file,
+            _make_worker_tool(model or os.environ.get("LLM_MODEL", "gpt-4o-mini")),
+        ],
+        model=model or os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+    )
+
+
+# ── Diff computation ────────────────────────────────────────────────────────
+
+
+def compute_diff(old: str, new: str) -> str:
+    """Human-readable diff showing what was added/changed."""
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+
+    if len(new_lines) > len(old_lines) and new_lines[: len(old_lines)] == old_lines:
+        added = new_lines[len(old_lines) :]
+        return "Added:\n" + "\n".join(f"  + {ln}" for ln in added)
+
+    if len(new_lines) < len(old_lines) and new_lines == old_lines[: len(new_lines)]:
+        removed = old_lines[len(new_lines) :]
+        return "Removed:\n" + "\n".join(f"  - {ln}" for ln in removed)
+
+    parts: list[str] = []
+    max_len = max(len(old_lines), len(new_lines))
+    changed = False
+    for i in range(max_len):
+        old_ln = old_lines[i] if i < len(old_lines) else None
+        new_ln = new_lines[i] if i < len(new_lines) else None
+        if old_ln != new_ln:
+            if not changed:
+                parts.append(f"  @@ line {i + 1}:")
+                changed = True
+            if old_ln is not None:
+                parts.append(f"  - {old_ln}")
+            if new_ln is not None:
+                parts.append(f"  + {new_ln}")
+        else:
+            changed = False
+    return "\n".join(parts) if parts else "(no visible changes)"
+
+
+# ── Processing ──────────────────────────────────────────────────────────────
+
+
+def process_change(
+    agent: Agent[ControlRoomContext],
+    ctx: ControlRoomContext,
+    diff: str,
+    context_lines: list[str],
+) -> str:
+    """Run the agent on a detected change."""
+    context = "\n".join(context_lines)
+
+    prompt = f"""\
+CONTROL_ROOM.md changed. Here's the diff:
+
+{diff}
+
+Recent file context:
+```
+{context}
+```
+
+FIRST: call `read_mindmap()` to see the full tree with node IDs.
+THEN: find the user message that was added, and reply with `add_reply()`.
+Or call `stay_silent()` if no response is needed."""
+
+    result = Runner.run_sync(agent, prompt, context=ctx, max_turns=30)
+    return result.final_output
+
+
+# ── Smoke test ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    ctx = ControlRoomContext()
+    if CONTROL_ROOM.exists():
+        ctx.last_content = CONTROL_ROOM.read_text()
+    agent = create_agent()
+    print(f"Agent: {agent.name}")
+    print(f"Model: {agent.model}")
+    print(f"Tools: {[t.name for t in agent.tools]}")
