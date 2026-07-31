@@ -7,4 +7,5 @@
 
 ```agentsmindmap
 root: CONTROL ROOM
+* Предложи улучшения по этому проекту, минимум 5
 ```

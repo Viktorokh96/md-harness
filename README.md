@@ -66,6 +66,31 @@ echo '*[hide] Archived topic' >> CONTROL_ROOM.md
 
 # Unhide — full subtree restored (LLM not called)
 # (remove [hide] from the line)
+
+## Archiving branches: `[archive]`
+
+Add `[archive]` (optionally with a reason) to detach a subtree and summarize it:
+
+```
+*[archive] Old discussion
+*[archive: outdated] Obsolete thread
+[*][archive] Archived agent reply
+```
+
+- **Detach**: subtree moves to `archive/<node_id>.md`, full tree preserved.
+- **Summarize**: LLM (one-shot, not ControlRoom) summarizes the subtree in one sentence.
+- **Shrink**: `.graph.json` actually gets smaller — children are removed.
+- **Restore**: remove `[archive]` marker to restore the full subtree from `archive/`.
+- **Preprocessor-only**: like `[hide]`, archive/unarchive doesn't call the ControlRoom agent.
+
+Example:
+
+```bash
+# Archive a branch (LLM called for summary only)
+echo '*[archive: outdated] Old topic' >> CONTROL_ROOM.md
+
+# Restore — subtree recovered from archive/
+# (remove [archive] from the line)
 ```
 
 ## Multi-line content
@@ -151,12 +176,12 @@ inline-vibe/
 ├── .CONTROL_ROOM.md_graph.json        # Full tree sidecar (includes hidden subtrees)
 ├── agent.py                           # Agent definition + 7 tools (OpenAI Agents SDK)
 ├── watcher.py                         # File watcher + graph sync + CLI
+├── archiver.py                        # Archive branch: summarize + detach
 ├── tree_engine.py                     # Parser, serializer, renderer, merge, JSON
-├── tests/                             # Test suite (85 tests)
+├── archive/                           # Archived subtrees (gitignored)
+├── tests/                             # Test suite (94 tests)
 │   ├── test_tree_engine.py
 │   ├── test_agent.py
-│   ├── test_watcher.py
-│   └── test_graph.py                  # [hide] + JSON + sync tests
 ├── pyproject.toml
 ├── .env                               # API keys (gitignored)
 ├── .env.example

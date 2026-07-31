@@ -342,3 +342,64 @@ class TestGraphSync:
             assert h is not None and not h.hidden
             assert len(h.children) == 1
             assert h.children[0].content == "Secret"
+
+
+
+# ── Archive parsing ─────────────────────────────────────────────────────────
+
+
+class TestArchiveParsing:
+    def test_archive_no_reason(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[archive] Old topic\n"))
+        n = tree.get_node("root.1")
+        assert n is not None and n.archived
+        assert n.archive_reason == ""
+
+    def test_archive_with_reason(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[archive: outdated] Old\n"))
+        n = tree.get_node("root.1")
+        assert n is not None and n.archived
+        assert n.archive_reason == "outdated"
+
+    def test_agent_archive(self) -> None:
+        tree = parse_mindmap(_md("root: R\n[*][archive] Reply\n"))
+        n = tree.get_node("root.1")
+        assert n is not None and n.archived and n.is_agent
+
+    def test_serialize_archive(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[archive] Old\n  [*] Reply\n"))
+        s = serialize_mindmap(tree)
+        assert "*[archive] Old" in s
+        assert "[*] Reply" not in s
+
+    def test_outline_archive(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[archive] Old\n"))
+        assert "🗄" in tree.to_outline()
+
+
+# ── Detach / Attach ─────────────────────────────────────────────────────────
+
+
+class TestDetachAttach:
+    def test_detach(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Topic\n  [*] R1\n  [*] R2\n"))
+        sub = tree.detach_subtree("root.1")
+        assert sub is not None
+        assert len(sub.all_nodes()) == 3
+        assert tree.get_node("root.1") is None
+
+    def test_attach(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Parent\n"))
+        sr = MindNode(id="x", content="Child", author="agent", depth=1)
+        subtree = MindTree(root=sr)
+        subtree._node_index["x"] = sr
+        tree.attach_subtree("root.1", subtree)
+        assert tree.get_node("root.1.1") is not None
+
+    def test_detach_attach_roundtrip(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Topic\n  [*] Reply\n"))
+        sub = tree.detach_subtree("root.1")
+        assert sub is not None
+        tree.attach_subtree("root", sub)
+        assert tree.get_node("root.1.1") is not None
+        assert tree.get_node("root.1.1").content == "Reply"

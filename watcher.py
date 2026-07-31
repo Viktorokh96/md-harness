@@ -123,8 +123,10 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
             print(f"[watcher] Restoring branch {node.id}...")
             restore_branch(md_path, node.id)
 
-# ── Run ─────────────────────────────────────────────────────────────────────
-
+    block = serialize_mindmap(merged)
+    new_content = replace_block(md_text, block)
+    ctx.file_path.write_text(new_content)
+    return new_content
 
 def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     """Process current state of CONTROL_ROOM.md once."""

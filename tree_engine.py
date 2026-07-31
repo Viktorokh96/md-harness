@@ -151,29 +151,18 @@ class MindTree:
         node.parent = parent
         parent.add_child(node)
 
-        def _reindex(n: MindNode, depth_offset: int) -> None:
-            new_depth = n.depth - subtree.root.depth + depth_offset
-            n.depth = new_depth
-            counter = len([c for c in (n.parent.children if n.parent else []) if c.depth == new_depth])
-            n.id = f"{parent_id}.{counter}"
+        def _fix_ids(n: MindNode, prefix: str, base_depth: int) -> None:
+            n.id = prefix
+            n.depth = base_depth
             self._node_index[n.id] = n
-            for c in n.children:
-                _reindex(c, depth_offset)
-        _reindex(node, parent.depth + 1)
+            for i, c in enumerate(n.children, 1):
+                _fix_ids(c, f"{prefix}.{i}", base_depth + 1)
 
-        def _fix_ids(n: MindNode, prefix: str) -> None:
-            idx = 0
-            for c in n.children:
-                idx += 1
-                c.id = f"{prefix}.{idx}"
-                self._node_index[c.id] = c
-                _fix_ids(c, c.id)
-        _fix_ids(node, parent_id)
-
+        idx = len(parent.children)  # position among siblings
+        _fix_ids(node, f"{parent_id}.{idx}", parent.depth + 1)
         return node
 
     def to_outline(self, *, show_hidden: bool = True) -> str:
-        """Indented outline with node IDs. 🗄=archived, 📦=hidden."""
         lines: list[str] = []
 
         def _walk(node: MindNode, indent: int) -> None:
