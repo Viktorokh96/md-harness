@@ -170,8 +170,7 @@ def _parse_block(block: str) -> MindTree:
     tree._node_index["root"] = root
 
     # Stack tracks parents at each depth
-    # stack[depth] = parent node for that depth
-    stack: dict[int, MindNode] = {-1: root}
+    stack: dict[int, MindNode] = {0: root}
     counter: dict[int, int] = {}  # depth → child counter for ID generation
 
     for line in lines[1:]:
@@ -181,8 +180,7 @@ def _parse_block(block: str) -> MindTree:
         # Determine depth from leading whitespace (2 spaces = 1 level)
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
-        depth = indent // 2
-
+        depth = indent // 2 + 1  # root is 0, first children start at 1
         if indent % 2 != 0:
             raise ValueError(f"Indent must be multiple of 2 spaces: {line!r}")
 
@@ -196,7 +194,6 @@ def _parse_block(block: str) -> MindTree:
         else:
             raise ValueError(f"Line must start with '* ' or '[*] ': {line!r}")
 
-        # Find parent (closest ancestor at depth-1)
         parent = stack.get(depth - 1)
         if parent is None:
             raise ValueError(

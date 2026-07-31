@@ -53,18 +53,13 @@ root: CONTROL ROOM
 """
 THINKING_MARKER = "[*] ...thinking..."
 
-def _append_placeholder(ctx: ControlRoomContext, user_content: str) -> str:
-    """Write [*] ...thinking... at correct nesting depth. Returns the exact line written."""
-    # Find last user line (*) depth
-    last_star_depth = 0
-    for line in user_content.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("*") and not stripped.startswith("[*]"):
-            last_star_depth = len(line) - len(stripped)
 
-    indent = "\t" * (last_star_depth + 1)
-    placeholder = f"{indent}{THINKING_MARKER}\n"
+def _append_placeholder(ctx: ControlRoomContext, _user_content: str = "") -> str:
+    """Write [*] ...thinking... as temporary visual feedback.
 
+    Written outside the ```agentsmindmap block — cleaned up after agent responds.
+    """
+    placeholder = f"{THINKING_MARKER}\n"
     current = ctx.file_path.read_text()
     if not current.endswith("\n"):
         placeholder = "\n" + placeholder
@@ -73,7 +68,7 @@ def _append_placeholder(ctx: ControlRoomContext, user_content: str) -> str:
 
 
 def _remove_thinking_markers(ctx: ControlRoomContext) -> str:
-    """Remove all [*] ...thinking... lines from the mind map. Returns cleaned content."""
+    """Remove all [*] ...thinking... lines from the file."""
     content = ctx.file_path.read_text()
     lines = content.splitlines()
     cleaned = [ln for ln in lines if THINKING_MARKER not in ln]

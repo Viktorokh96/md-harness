@@ -113,70 +113,46 @@ class TestComputeDiff:
 class TestPlaceholder:
     """Tests for thinking placeholder write/cleanup."""
 
-    def test_append_placeholder_depth_0(self) -> None:
-        """User message at depth 0 → placeholder at depth 1."""
+    def test_appends_marker(self) -> None:
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "test.md"
-            fpath.write_text("* Hello\n")
+            fpath.write_text("# Test\n\n```agentsmindmap\nroot: R\n```\n")
 
             ctx = ControlRoomContext(file_path=fpath)
-            _append_placeholder(ctx, "* Hello\n")
+            _append_placeholder(ctx)
 
             content = fpath.read_text()
             assert THINKING_MARKER in content
-            # Should be at depth 1 (one tab)
-            assert content.rstrip().endswith("\t[*] ...thinking...")
 
-    def test_append_placeholder_depth_1(self) -> None:
-        """User message at depth 1 → placeholder at depth 2."""
+    def test_appends_even_without_trailing_newline(self) -> None:
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "test.md"
-            fpath.write_text("* Hello\n\t* Sub question\n")
+            fpath.write_text("text without newline")
 
             ctx = ControlRoomContext(file_path=fpath)
-            _append_placeholder(ctx, "* Hello\n\t* Sub question\n")
+            _append_placeholder(ctx)
 
-            content = fpath.read_text()
-            assert THINKING_MARKER in content
-            assert content.rstrip().endswith("\t\t[*] ...thinking...")
-
-    def test_append_placeholder_ignores_agent_lines(self) -> None:
-        """Only user lines (*) determine depth, not agent lines ([*])."""
-        with TemporaryDirectory() as tmp:
-            fpath = Path(tmp) / "test.md"
-            fpath.write_text("* Hello\n\t[*] Agent reply\n")
-
-            ctx = ControlRoomContext(file_path=fpath)
-            _append_placeholder(ctx, "* Hello\n\t[*] Agent reply\n")
-
-            content = fpath.read_text()
-            # Agent line is at depth 1, but last user line is at depth 0
-            # So placeholder should be at depth 1
-            assert content.rstrip().endswith("\t[*] ...thinking...")
+            assert THINKING_MARKER in fpath.read_text()
 
     def test_remove_thinking_markers(self) -> None:
-        """Cleanup removes all thinking markers."""
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "test.md"
             fpath.write_text(
-                "* Hello\n"
-                "\t[*] ...thinking...\n"
-                "\t[*] Real response\n"
-                "\t\t[*] ...thinking...\n"
+                "# Header\n\n"
+                "```agentsmindmap\nroot: R\n```\n"
+                f"{THINKING_MARKER}\n"
             )
 
             ctx = ControlRoomContext(file_path=fpath)
             result = _remove_thinking_markers(ctx)
 
             assert THINKING_MARKER not in result
-            assert "[*] Real response" in result
-            assert "* Hello" in result
+            assert "root: R" in result
 
     def test_remove_thinking_markers_noop(self) -> None:
-        """No markers → no change."""
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "test.md"
-            original = "* Hello\n\t[*] Response\n"
+            original = "# Just text\n"
             fpath.write_text(original)
 
             ctx = ControlRoomContext(file_path=fpath)
@@ -194,12 +170,11 @@ class TestTemplate:
     def test_template_has_header(self) -> None:
         assert "# CONTROL ROOM" in MIND_MAP_TEMPLATE
 
-    def test_template_has_format_docs(self) -> None:
-        assert "`*`" in MIND_MAP_TEMPLATE
-        assert "[*]" in MIND_MAP_TEMPLATE
+    def test_template_has_tree_block(self) -> None:
+        assert "```agentsmindmap" in MIND_MAP_TEMPLATE
+        assert "root: CONTROL ROOM" in MIND_MAP_TEMPLATE
 
-    def test_template_does_not_contain_thinking_marker(self) -> None:
-        """Template should not have placeholder — that's added at runtime."""
+    def test_template_no_thinking_marker(self) -> None:
         assert THINKING_MARKER not in MIND_MAP_TEMPLATE
 
 
@@ -237,7 +212,7 @@ class TestEndToEnd:
     """End-to-end workflow simulations (no LLM calls)."""
 
     def test_full_cycle_no_llm(self) -> None:
-        """Simulate: create file, add user message, placeholder, cleanup."""
+        """Simulate: create file, placeholder, cleanup."""
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "room.md"
             fpath.write_text(MIND_MAP_TEMPLATE)
@@ -245,26 +220,11 @@ class TestEndToEnd:
             ctx = ControlRoomContext(file_path=fpath)
             ctx.last_content = fpath.read_text()
 
-            # User adds a message
-            fpath.write_text(ctx.last_content + "* Hello\n")
-            new_content = fpath.read_text()
-            diff = compute_diff(ctx.last_content, new_content)
-
-            # Diff should show the append
-            assert "+ * Hello" in diff
-
-            # Placeholder
-            _append_placeholder(ctx, new_content)
-            content_with_placeholder = fpath.read_text()
-            assert THINKING_MARKER in content_with_placeholder
-
-            # Agent "responds" (simulated)
-            fpath.write_text(
-                content_with_placeholder + "\t[*] ✅ Hi! How can I help?\n"
-            )
+            # Placeholder write
+            _append_placeholder(ctx)
+            assert THINKING_MARKER in fpath.read_text()
 
             # Cleanup
             cleaned = _remove_thinking_markers(ctx)
             assert THINKING_MARKER not in cleaned
-            assert "[*] ✅ Hi!" in cleaned
-            assert "* Hello" in cleaned
+            assert "root: CONTROL ROOM" in cleaned
