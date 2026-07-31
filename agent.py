@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-
 from agents import Agent, RunContextWrapper, Runner, function_tool, set_tracing_disabled
 
 from tree_engine import (
@@ -30,14 +29,7 @@ from tree_engine import (
 if os.environ.get("DISABLE_TRACING", "1") != "0":
     set_tracing_disabled(True)
 
-CONTROL_ROOM = Path(__file__).resolve().parent / "CONTROL_ROOM.md"
-MINDMAP_TEMPLATE = """\
-# CONTROL ROOM
 
-```agentsmindmap
-root: CONTROL ROOM
-```
-"""
 
 
 # ── Context ─────────────────────────────────────────────────────────────────

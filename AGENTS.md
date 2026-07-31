@@ -63,14 +63,12 @@ root: CONTROL ROOM
 ## Запуск
 
 ```bash
-python3 watcher.py [путь] [--once] [--dry-run] [--model MODEL] [--interval SEC]
-```
+python3 watcher.py [путь] [--once] [--dry-run] [--model MODEL]
 
 - `[путь]` — по умолчанию `CONTROL_ROOM.md`. Если нет — создаётся шаблон.
 - `--once` — один проход вместо непрерывного вотча.
 - `--dry-run` — показать diff без вызова LLM.
-- `--interval` — интервал опроса (по умолчанию 2.0 сек).
-
+- `--model` — модель (по умолчанию из `LLM_MODEL`).
 ## Инструменты агента
 
 | Tool | Назначение |
