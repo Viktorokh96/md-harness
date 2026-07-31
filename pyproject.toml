@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "CONTROL ROOM — LLM-powered mind map dialogue with OpenAI Agents SDK"
 requires-python = ">=3.11"
 dependencies = [
-    "openai-agents>=0.18",
+    "watchfiles>=0.24",
 ]
 
 [project.scripts]

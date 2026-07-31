@@ -11,13 +11,11 @@ On each change:
 The .md file is a VIEW into the full tree stored in .graph.json.
 Hidden subtrees exist only in .graph.json.
 """
-
 import argparse
 import os
-import time
 from pathlib import Path
 
-# ── Load .env ───────────────────────────────────────────────────────────────
+from watchfiles import Change, watch
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -179,9 +177,9 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
 
 
 def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False, interval: float = 2.0) -> None:
-    """Watch the mind map file continuously, processing changes."""
-    fpath = ctx.file_path
-    print(f"[watcher] Watching {fpath} (poll every {interval}s)...")
+    """Watch the mind map file continuously using inotify (via watchfiles)."""
+    fpath = ctx.file_path.resolve()
+    print(f"[watcher] Watching {fpath.name} (inotify, real-time)...")
     print("[watcher] Press Ctrl+C to stop.\n")
 
     if fpath.exists():
@@ -193,29 +191,25 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False, interval
         ctx.last_content = MIND_MAP_TEMPLATE
         ctx.last_mtime = fpath.stat().st_mtime
 
-    while True:
-        try:
-            if not fpath.exists():
-                time.sleep(interval)
-                continue
+    try:
+        for changes in watch(fpath.parent):
+            # Filter: only care about our target file
+            for change_type, path in changes:
+                if Path(path).resolve() != fpath:
+                    continue
+                if change_type not in (Change.modified, Change.added):
+                    continue
+                if not fpath.exists():
+                    continue
 
-            mtime = fpath.stat().st_mtime
-            if mtime != ctx.last_mtime:
                 content = fpath.read_text()
-                if content != ctx.last_content:
-                    run_once(agent, ctx, dry_run=dry_run)
-                else:
-                    ctx.last_mtime = mtime  # touched but same content
+                if content == ctx.last_content:
+                    continue  # debounce: same content, likely double-write
 
-            time.sleep(interval)
-        except KeyboardInterrupt:
-            print("\n[watcher] Stopped.")
-            break
-        except Exception as exc:
-            print(f"[watcher] Error: {exc}")
-            time.sleep(2)
-
-
+                run_once(agent, ctx, dry_run=dry_run)
+                break  # one trigger per batch
+    except KeyboardInterrupt:
+        print("\n[watcher] Stopped.")
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
