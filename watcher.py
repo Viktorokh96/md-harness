@@ -116,7 +116,7 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
 
     old_archived = {n.id for n in full.all_nodes() if n.archived}
     merged = merge_md_into_graph(full, md_tree)
-    # Handle unarchive (restore)
+    save_graph(merged, md_path)
     for node in merged.all_nodes():
         if node is merged.root:
             continue
