@@ -513,3 +513,28 @@ class TestHideCycleE2E:
             assert not new.get_node("root.1").hidden
             assert new.get_node("root.1.1") is not None
             assert new.get_node("root.1.1").content == "A"
+
+
+# ── batch_reply ─────────────────────────────────────────────────────────────
+
+
+class TestBatchReply:
+    def test_creates_multiple_branches(self) -> None:
+        import tempfile, os
+        from tree_engine import MindTree, MindNode
+        with tempfile.TemporaryDirectory() as tmp:
+            root = MindNode(id="root", content="R", author="system", depth=0)
+            tree = MindTree(root=root)
+            tree._node_index["root"] = root
+            q = tree.add_reply("root", "Q", "user")
+
+            replies = ["Idea 1", "Idea 2", "Idea 3"]
+            ids = []
+            for text in replies:
+                child = tree.add_reply(q.id, text, "agent")
+                ids.append(child.id)
+
+            assert len(q.children) == 3
+            assert q.children[0].content == "Idea 1"
+            assert q.children[1].content == "Idea 2"
+            assert q.children[2].content == "Idea 3"

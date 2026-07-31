@@ -160,7 +160,8 @@ CONTROL_ROOM.md ──→ watcher.py (inotify via watchfiles, instant)
 | Tool | Description |
 |------|-------------|
 | `read_mindmap()` | Outline of tree with node IDs (📦 marks hidden nodes) |
-| `add_reply(parent_id, content)` | Add a child node under `parent_id` |
+| `add_reply(parent_id, content)` | Add ONE child node under `parent_id` |
+| `batch_reply(parent_id, [...])` | Add MULTIPLE child nodes at once (list of strings) |
 | `find_nodes(query)` | Case-insensitive subtree search |
 | `stay_silent()` | Skip — no response needed |
 | `run_shell(command)` | Execute shell in project root |

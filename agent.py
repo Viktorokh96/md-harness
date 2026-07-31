@@ -2,7 +2,7 @@
 CONTROL ROOM agent — built on OpenAI Agents SDK.
 
 Tree-based mind map with ```agentsmindmap blocks.
-Tools: read_mindmap, add_reply, find_nodes, stay_silent,
+Tools: read_mindmap, add_reply, batch_reply, find_nodes, stay_silent,
         run_shell, read_file, delegate_task (Worker).
 """
 
@@ -106,14 +106,36 @@ def add_reply(
 
 
 @function_tool
+def batch_reply(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    parent_id: str,
+    replies: list[str],
+) -> str:
+    """Create MULTIPLE reply branches under `parent_id` at once.
+
+    Use this when the user asks for N separate ideas/responses — pass them
+    as a list and they all become separate `[*]` branches. Much more reliable
+    than calling `add_reply` multiple times.
+
+    Args:
+        parent_id: The node ID to reply to.
+        replies: List of reply texts. Each string becomes one `[*]` branch.
+    """
+    tree = _read_tree(wrapper.context)
+    ids = []
+    for text in replies:
+        child = tree.add_reply(parent_id, text, author="agent")
+        ids.append(child.id)
+    _write_tree(wrapper.context, tree)
+    return f"Added {len(replies)} replies under {parent_id}: {', '.join(ids)}"
+
+
+@function_tool
 def find_nodes(
     wrapper: RunContextWrapper[ControlRoomContext],
     query: str,
 ) -> str:
     """Search the mind map tree for nodes containing `query` (case-insensitive).
-
-    Returns matching nodes with their IDs and paths.
-
     Args:
         query: Substring to search for in node content.
     """
@@ -242,35 +264,35 @@ stored in a ```agentsmindmap markdown block.
 The mind map is a TREE with node IDs. Every turn:
 1. Call `read_mindmap()` to see the full tree with IDs.
 2. Find the node you want to reply to (usually the latest user message).
-3. Call `add_reply(parent_id, content)` to add your response as a child node.
+3. Call `add_reply(parent_id, content)` for ONE reply, or
+   `batch_reply(parent_id, ["idea1", "idea2", ...])` for MULTIPLE replies.
 4. Or call `stay_silent()` if no response is needed.
+
+## batch_reply usage
+- When asked for N separate ideas/responses: use `batch_reply(parent_id, [...])`
+  with ALL replies in a single list. One call = N branches. Much more reliable
+  than calling `add_reply` N times.
+- Each string in the list becomes one `[*]` branch under parent_id.
 
 ## Node format
 - `*` nodes = user messages
 - `[*]` nodes = your (agent) messages
 - Node IDs look like `root.1`, `root.1.1`, `root.1.1.1`
-- To reply to a node, use its ID in `add_reply(parent_id, ...)`
 
-## Prefix icons for your replies
-Start your reply content with one of these:
+## Prefix icons
 - (no icon) — analysis, thought, observation
 - ❓ — question for the user
 - ▶ — action taken (shell command, file read, etc.)
 - ✅ — task completed, decision made, fact confirmed
 
 ## Rules
-- ALWAYS call `read_mindmap()` first to see the current state.
-- Reply to the latest user message unless the user explicitly addresses
-  an earlier topic — then use `find_nodes(query)` to locate it.
+- ALWAYS call `read_mindmap()` first.
+- Reply to the latest user message unless addressing an earlier topic.
 - Be concise: 1-3 lines per reply.
+- Use `find_nodes(query)` to search for topics.
 - Use `run_shell` and `read_file` to explore the codebase.
 - Use `delegate_task` for multi-step work.
-- Use `find_nodes` to search for topics before replying.
-- After adding your reply, you can add more replies or call `stay_silent()`.
-- **CRITICAL**: If the user asks for N separate responses/branches, you MUST
-  call `add_reply()` N times — one call per branch. NEVER write multiple
-  ideas in a single `add_reply()` call. Each idea = its own `add_reply()`.
-  Do NOT claim "создано N веток" unless you actually called add_reply N times.
+- NEVER claim "создано N веток" unless you actually called add_reply/batch_reply.
 """
 
 def create_agent(model: str | None = None) -> Agent[ControlRoomContext]:
@@ -281,13 +303,13 @@ def create_agent(model: str | None = None) -> Agent[ControlRoomContext]:
         tools=[
             read_mindmap,
             add_reply,
+            batch_reply,
             find_nodes,
             stay_silent,
             run_shell,
             read_file,
             _make_worker_tool(model or os.environ.get("LLM_MODEL", "gpt-4o-mini")),
         ],
-        model=model or os.environ.get("LLM_MODEL", "gpt-4o-mini"),
     )
 
 
