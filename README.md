@@ -91,14 +91,13 @@ python3 watcher.py [file] [--once] [--dry-run] [--model MODEL] [--interval SEC]
   --once        Process once and exit.
   --dry-run     Show diff, don't call LLM.
   --model       Override LLM_MODEL from .env.
-  --interval    Poll interval in seconds (default: 2.0).
+  --interval    Poll interval in seconds (unused in watch mode — inotify is real-time).
 ```
 
 ## Architecture
 
 ```
-CONTROL_ROOM.md ──→ watcher.py (poll mtime, 2s interval)
-                     │
+CONTROL_ROOM.md ──→ watcher.py (inotify via watchfiles, instant)
                      ├── diff contains [hide]-only changes?
                      │   YES → preprocessor updates .graph.json, re-renders .md
                      │   NO  → LLM agent runs
@@ -196,5 +195,4 @@ python3 watcher.py CONTROL_ROOM_TEST.md --interval 0.5
 - **Tree, not flat log**: branching conversations possible; stable node IDs for addressing.
 - **`.graph.json` sidecar**: full tree including hidden branches — `.md` is a VIEW into the graph.
 - **`[hide]` as preprocessor-only**: no LLM cost for toggling visibility; instant feedback.
-- **Poll-based watcher**: simpler than inotify, cross-platform, 2s is fast enough for human-paced dialogue.
-- **Worker via `Agent.as_tool()`**: ControlRoom stays in control; Worker does research, ControlRoom decides what to say.
+- **inotify via watchfiles**: instant reaction, zero CPU idle, cross-platform (Linux/macOS/Windows).

@@ -57,8 +57,7 @@ root: CONTROL ROOM
 | `CONTROL_ROOM.md` | Mind map диалога (видимая часть). **НЕ ТРОГАТЬ без явной просьбы.** |
 | `.CONTROL_ROOM.md_graph.json` | Полное дерево (включая скрытые ветки). Автосоздаётся. |
 | `agent.py` | Агент на OpenAI Agents SDK. 7 инструментов. |
-| `watcher.py` | Poll-наблюдатель + синхронизация `.graph.json` + CLI. |
-| `tree_engine.py` | Парсер, сериалайзер, рендерер, merge, JSON-сериализация. |
+| `watcher.py` | inotify-наблюдатель (watchfiles) + синхронизация `.graph.json` + CLI. |
 | `tests/` | Тесты: 85 штук, 4 файла. |
 | `.env` | API-ключи (DeepSeek по умолчанию). **НЕ коммитить.** |
 | `pyproject.toml` | Зависимости: `openai-agents>=0.18` |
