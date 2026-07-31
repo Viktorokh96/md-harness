@@ -30,9 +30,8 @@ if os.environ.get("DISABLE_TRACING", "1") != "0":
     set_tracing_disabled(True)
 
 
+CONTROL_ROOM = Path(__file__).resolve().parent / "CONTROL_ROOM.md"
 
-
-# ── Context ─────────────────────────────────────────────────────────────────
 
 
 @dataclass
