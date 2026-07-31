@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
-
 # ── Block markers ───────────────────────────────────────────────────────────
 
 BLOCK_START = "```agentsmindmap"
@@ -38,7 +38,7 @@ HIDE_RE = re.compile(r"^(\*|\[\*\])\[hide\]\s")
 ARCHIVE_RE = re.compile(r"^(\*|\[\*\])\[archive\](\s.*)?$")
 ARCHIVE_REASON_RE = re.compile(r"^(\*|\[\*\])\[archive:\s*(.+?)\]\s?(.*)?$")
 TAG_RE = re.compile(r"^(\*|\[\*\])\s")
-
+UUID_RE = re.compile(r"<!--\s*uuid:(\S+)\s*-->")
 # ── Node ────────────────────────────────────────────────────────────────────
 
 
@@ -50,6 +50,7 @@ class MindNode:
     content: str
     author: str  # "user" or "agent"
     depth: int
+    uuid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     hidden: bool = False
     archived: bool = False
     archive_reason: str = ""
@@ -188,8 +189,8 @@ class MindTree:
     def to_dict(self) -> dict[str, Any]:
         def _node_to_dict(node: MindNode) -> dict[str, Any]:
             d: dict[str, Any] = {
-                "id": node.id, "content": node.content, "author": node.author,
-                "depth": node.depth, "hidden": node.hidden,
+                "id": node.id, "uuid": node.uuid, "content": node.content,
+                "author": node.author, "depth": node.depth, "hidden": node.hidden,
                 "children": [_node_to_dict(c) for c in node.children],
             }
             if node.archived:
@@ -202,7 +203,8 @@ class MindTree:
     def from_dict(cls, data: dict[str, Any]) -> MindTree:
         def _dict_to_node(d: dict[str, Any]) -> MindNode:
             node = MindNode(
-                id=d["id"], content=d["content"], author=d["author"],
+                id=d["id"], uuid=d.get("uuid", uuid.uuid4().hex[:12]),
+                content=d["content"], author=d["author"],
                 depth=d["depth"], hidden=d.get("hidden", False),
                 archived=d.get("archived", False),
                 archive_reason=d.get("archive_reason", ""),
@@ -218,7 +220,6 @@ class MindTree:
                 _index(c)
         _index(root)
         return tree
-
 
 # ── Parser ──────────────────────────────────────────────────────────────────
 
@@ -296,6 +297,13 @@ def _parse_block(block: str) -> MindTree:
             parent_node.content += "\n" + stripped
             continue
 
+        # Extract UUID from content comment if present
+        node_uuid = ""
+        uuid_m = UUID_RE.search(content)
+        if uuid_m:
+            node_uuid = uuid_m.group(1)
+            content = UUID_RE.sub("", content).strip()
+
         parent = stack.get(depth - 1)
         if parent is None:
             raise ValueError(f"No parent at depth {depth - 1}: {line!r}")
@@ -303,10 +311,13 @@ def _parse_block(block: str) -> MindTree:
         counter[depth] += 1
         node_id = f"{parent.id}.{counter[depth]}"
 
-        node = MindNode(
+        kwargs: dict[str, Any] = dict(
             id=node_id, content=content, author=author, depth=depth,
             hidden=hidden, archived=archived, archive_reason=archive_reason,
         )
+        if node_uuid:
+            kwargs["uuid"] = node_uuid
+        node = MindNode(**kwargs)
         parent.add_child(node)
         tree._node_index[node_id] = node
         stack[depth] = node
@@ -335,7 +346,8 @@ def serialize_mindmap(tree: MindTree) -> str:
             elif node.hidden:
                 tag = f"{tag}[hide]"
             content_lines = node.content.split("\n")
-            lines.append(f"{indent}{tag} {content_lines[0]}")
+            uuid_suffix = f" <!--uuid:{node.uuid}-->" if node.uuid else ""
+            lines.append(f"{indent}{tag} {content_lines[0]}{uuid_suffix}")
             cont_indent = "  " * depth
             for cont in content_lines[1:]:
                 lines.append(f"{cont_indent}{cont}")
@@ -343,18 +355,19 @@ def serialize_mindmap(tree: MindTree) -> str:
             return
         for child in node.children:
             _walk(child, depth + 1, lines)
-
     lines: list[str] = []
     _walk(tree.root, 0, lines)
     body = "\n".join(lines)
     return f"{BLOCK_START}\n{body}\n{BLOCK_END}\n"
 
 
-# ── Merge ───────────────────────────────────────────────────────────────────
-
-
 def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
-    """Merge .md changes into full graph. .md authoritative for content/flags."""
+    """Merge .md changes into full graph via UUID matching.
+
+    UUIDs are embedded in .md as <!--uuid:...--> comments.
+    Nodes matched by UUID preserve graph's identity; new nodes get fresh UUIDs.
+    .md is authoritative for content and flags.
+    """
     graph._node_index = {}
     _reindex(graph.root, graph._node_index)
     md_tree._node_index = {}
@@ -364,20 +377,44 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
         if m is not None:
             was_hidden = g.hidden
             was_archived = g.archived
+            g.content = m.content
             g.hidden = m.hidden
             g.archived = m.archived
             g.archive_reason = m.archive_reason
 
-            g_children = {c.id: c for c in g.children}
+            g_children_by_uuid = {c.uuid: c for c in g.children}
+            g_children_unmatched = set(range(len(g.children)))  # indices
             new_children: list[MindNode] = []
+
             for mc in m.children:
-                merged = _merge(g_children[mc.id], mc) if mc.id in g_children else _copy_node(mc)
+                # Try UUID match first
+                if mc.uuid in g_children_by_uuid:
+                    gc = g_children_by_uuid[mc.uuid]
+                    # Find and mark its index as matched
+                    for gi, gci in enumerate(g.children):
+                        if gci.uuid == mc.uuid:
+                            g_children_unmatched.discard(gi)
+                            break
+                    merged = _merge(gc, mc)
+                else:
+                    # Fallback: content-based match for unmatched graph children
+                    matched_gc = None
+                    for gi in list(g_children_unmatched):
+                        if g.children[gi].content == mc.content:
+                            matched_gc = g.children[gi]
+                            g_children_unmatched.discard(gi)
+                            break
+                    if matched_gc is not None:
+                        merged = _merge(matched_gc, mc)
+                    else:
+                        merged = _copy_node(mc)
                 new_children.append(merged)
                 merged.parent = g
-
             if (was_hidden and not g.hidden) or g.hidden or (was_archived and not g.archived) or g.archived:
                 if not new_children and g.children:
                     new_children = [_copy_node(c) for c in g.children]
+                    for c in new_children:
+                        c.parent = g
             g.children = new_children
         return g
 
@@ -389,7 +426,8 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
 
 def _copy_node(node: MindNode) -> MindNode:
     new = MindNode(
-        id=node.id, content=node.content, author=node.author, depth=node.depth,
+        id=node.id, uuid=node.uuid, content=node.content,
+        author=node.author, depth=node.depth,
         hidden=node.hidden, archived=node.archived, archive_reason=node.archive_reason,
     )
     for c in node.children:
