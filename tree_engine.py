@@ -363,7 +363,7 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
     def _merge(g: MindNode, m: MindNode | None) -> MindNode:
         if m is not None:
             was_hidden = g.hidden
-            g.content = m.content
+            was_archived = g.archived
             g.hidden = m.hidden
             g.archived = m.archived
             g.archive_reason = m.archive_reason
@@ -375,11 +375,9 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
                 new_children.append(merged)
                 merged.parent = g
 
-            if (was_hidden and not g.hidden) or g.hidden:
+            if (was_hidden and not g.hidden) or g.hidden or (was_archived and not g.archived) or g.archived:
                 if not new_children and g.children:
                     new_children = [_copy_node(c) for c in g.children]
-                    for c in new_children:
-                        c.parent = g
             g.children = new_children
         return g
 

@@ -109,10 +109,11 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
                 print(f"[watcher] Archiving branch {node.id}...")
                 archive_branch(md_path, node.id, node.archive_reason)
 
-    old_archived = {n.id for n in full.all_nodes() if n.archived}
-
+    # Reload: archive_branch modified .graph.json independently
+    full = load_graph(md_path)
+    if full is None:
+        full = md_tree
     merged = merge_md_into_graph(full, md_tree)
-    save_graph(merged, md_path)
 
     # Handle unarchive (restore)
     for node in merged.all_nodes():
