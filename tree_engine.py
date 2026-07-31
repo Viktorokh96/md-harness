@@ -1,31 +1,38 @@
 """Mind map tree engine — parser, serializer, renderer for ```agentsmindmap blocks.
 
-Format inside the block:
+Format:
+    ```agentsmindmap
     root: Room Name
-    * user message
-      [*] agent reply
-        * user follow-up
-          [*] agent answer
-      [*] parallel agent thought
-    * another topic
+    * user message                   # user node, visible
+    *[hide] summary                  # user node, hidden
+      [*] agent reply                # agent node, visible
+      [*][hide] summary              # agent node, hidden
+        continuation line            # appended to parent node content
+    ```
 
-Rules:
-- 2-space indent per nesting level
-- `* ` prefix = user node
-- `[*] ` prefix = agent node
-- Each node gets a stable ID for tool-based manipulation
+Features:
+- Tree structure with stable dot-separated node IDs (root.1, root.1.1, ...)
+- [hide] marker: hidden subtrees collapsed to summary; .graph.json stores full tree
+- Continuation lines: indented non-tag lines appended to parent node content
+- JSON serialization: to_dict/from_dict for .graph.json sidecar
 """
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
-from typing import Optional
-
+from typing import Any
 
 # ── Block markers ───────────────────────────────────────────────────────────
 
 BLOCK_START = "```agentsmindmap"
 BLOCK_END = "```"
+
+# ── Regex ───────────────────────────────────────────────────────────────────
+
+HIDE_RE = re.compile(r"^(\*|\[\*\])\[hide\]\s")
+TAG_RE = re.compile(r"^(\*|\[\*\])\s")
 
 # ── Node ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +45,7 @@ class MindNode:
     content: str
     author: str  # "user" or "agent"
     depth: int
+    hidden: bool = False
     children: list[MindNode] = field(default_factory=list)
     parent: MindNode | None = field(default=None, repr=False)
 
@@ -65,7 +73,8 @@ class MindNode:
 
     def __repr__(self) -> str:
         prefix = "*" if self.is_user else "[*]"
-        return f"MindNode({self.id}, {prefix} {self.content[:40]})"
+        h = "[hide]" if self.hidden else ""
+        return f"MindNode({self.id}, {prefix}{h} {self.content[:40]})"
 
 
 # ── Tree ────────────────────────────────────────────────────────────────────
@@ -97,14 +106,19 @@ class MindTree:
 
         child_id = f"{parent_id}.{len(parent.children) + 1}"
         child = MindNode(
-            id=child_id, content=content, author=author, depth=parent.depth + 1
+            id=child_id, content=content, author=author, depth=parent.depth + 1,
         )
         parent.add_child(child)
         self._node_index[child_id] = child
         return child
 
-    def to_outline(self) -> str:
-        """Serialize tree to indented outline format (for display/LLM)."""
+    def to_outline(self, *, show_hidden: bool = True) -> str:
+        """Serialize tree to indented outline format (for display/LLM).
+
+        Args:
+            show_hidden: If True, include hidden nodes marked as 📦.
+                         If False, skip hidden subtrees entirely.
+        """
         lines: list[str] = []
 
         def _walk(node: MindNode, indent: int) -> None:
@@ -113,22 +127,54 @@ class MindTree:
                 lines.append(f"📌 [{node.id}] {node.content}")
             else:
                 tag = "*" if node.is_user else "[*]"
-                lines.append(f"{prefix}{tag} [{node.id}] {node.content}")
+                marker = "📦" if node.hidden else tag
+                lines.append(f"{prefix}{marker} [{node.id}] {node.content}")
+            if node.hidden and not show_hidden:
+                return  # skip hidden subtree
             for child in node.children:
                 _walk(child, indent + 1)
 
         _walk(self.root, 0)
         return "\n".join(lines)
 
-        def _walk(node: MindNode, indent: int) -> None:
-            prefix = "  " * indent
-            tag = "*" if node.is_user else "[*]"
-            lines.append(f"{prefix}{tag} [{node.id}] {node.content}")
-            for child in node.children:
-                _walk(child, indent + 1)
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize tree to JSON-compatible dict."""
+        def _node_to_dict(node: MindNode) -> dict[str, Any]:
+            return {
+                "id": node.id,
+                "content": node.content,
+                "author": node.author,
+                "depth": node.depth,
+                "hidden": node.hidden,
+                "children": [_node_to_dict(c) for c in node.children],
+            }
+        return _node_to_dict(self.root)
 
-        _walk(self.root, 0)
-        return "\n".join(lines)
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MindTree:
+        """Deserialize tree from JSON-compatible dict."""
+        def _dict_to_node(d: dict[str, Any]) -> MindNode:
+            node = MindNode(
+                id=d["id"],
+                content=d["content"],
+                author=d["author"],
+                depth=d["depth"],
+                hidden=d.get("hidden", False),
+            )
+            for cd in d.get("children", []):
+                child = _dict_to_node(cd)
+                node.add_child(child)
+            return node
+
+        root = _dict_to_node(data)
+        tree = cls(root=root)
+        # Rebuild _node_index
+        def _index(node: MindNode) -> None:
+            tree._node_index[node.id] = node
+            for child in node.children:
+                _index(child)
+        _index(root)
+        return tree
 
 
 # ── Parser ──────────────────────────────────────────────────────────────────
@@ -139,7 +185,6 @@ def parse_mindmap(text: str) -> MindTree:
 
     Returns a MindTree. Raises ValueError on malformed input.
     """
-    # Extract block
     start = text.find(BLOCK_START)
     if start == -1:
         raise ValueError(f"No {BLOCK_START} block found in text")
@@ -184,15 +229,29 @@ def _parse_block(block: str) -> MindTree:
         if indent % 2 != 0:
             raise ValueError(f"Indent must be multiple of 2 spaces: {line!r}")
 
-        # Determine author and content
-        if stripped.startswith("[*] "):
-            author = "agent"
-            content = stripped[4:].strip()
-        elif stripped.startswith("* "):
-            author = "user"
-            content = stripped[2:].strip()
+        # Check for [hide] marker: *[hide] or [*][hide]
+        hide_match = HIDE_RE.match(stripped)
+        if hide_match:
+            tag = hide_match.group(1)
+            author = "agent" if tag == "[*]" else "user"
+            content = stripped[hide_match.end():].strip()
+            hidden = True
+        elif TAG_RE.match(stripped):
+            tag_match = TAG_RE.match(stripped)
+            assert tag_match is not None
+            tag = tag_match.group(1)
+            author = "agent" if tag == "[*]" else "user"
+            content = stripped[tag_match.end():].strip()
+            hidden = False
         else:
-            raise ValueError(f"Line must start with '* ' or '[*] ': {line!r}")
+            # Continuation line — append to parent at depth-1
+            parent_node = stack.get(depth - 1)
+            if parent_node is None:
+                raise ValueError(
+                    f"No parent at depth {depth - 1} for continuation: {line!r}"
+                )
+            parent_node.content += "\n" + stripped
+            continue
 
         parent = stack.get(depth - 1)
         if parent is None:
@@ -203,10 +262,11 @@ def _parse_block(block: str) -> MindTree:
         # Generate ID
         counter.setdefault(depth, 0)
         counter[depth] += 1
-        node_id_parts = [parent.id, str(counter[depth])]
-        node_id = ".".join(node_id_parts)
+        node_id = f"{parent.id}.{counter[depth]}"
 
-        node = MindNode(id=node_id, content=content, author=author, depth=depth)
+        node = MindNode(
+            id=node_id, content=content, author=author, depth=depth, hidden=hidden,
+        )
         parent.add_child(node)
         tree._node_index[node_id] = node
 
@@ -224,15 +284,28 @@ def _parse_block(block: str) -> MindTree:
 
 
 def serialize_mindmap(tree: MindTree) -> str:
-    """Serialize a MindTree back to a ```agentsmindmap markdown block."""
+    """Serialize a MindTree back to a ```agentsmindmap markdown block.
 
+    Hidden subtrees are collapsed to a single summary line.
+    Multi-line node content gets continuation indent.
+    """
     def _walk(node: MindNode, depth: int, lines: list[str]) -> None:
         if node is tree.root:
             lines.append(f"root: {node.content}")
         else:
             indent = "  " * (depth - 1)
             tag = "*" if node.is_user else "[*]"
-            lines.append(f"{indent}{tag} {node.content}")
+            if node.hidden:
+                tag = f"{tag}[hide]"
+            content_lines = node.content.split("\n")
+            lines.append(f"{indent}{tag} {content_lines[0]}")
+            # Continuation lines at child indent (depth * 2 spaces)
+            cont_indent = "  " * depth
+            for cont in content_lines[1:]:
+                lines.append(f"{cont_indent}{cont}")
+
+        if node.hidden:
+            return  # don't render children of hidden nodes
         for child in node.children:
             _walk(child, depth + 1, lines)
 
@@ -240,6 +313,91 @@ def serialize_mindmap(tree: MindTree) -> str:
     _walk(tree.root, 0, lines)
     body = "\n".join(lines)
     return f"{BLOCK_START}\n{body}\n{BLOCK_END}\n"
+
+
+def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
+    """Merge changes from .md (visible tree) into full graph.
+
+    .md is authoritative for content and hidden flags of visible nodes.
+    .graph provides children of hidden nodes and any nodes not present in .md.
+    """
+    # Rebuild _node_index for both
+    graph._node_index = {}
+    _reindex(graph.root, graph._node_index)
+    md_tree._node_index = {}
+    _reindex(md_tree.root, md_tree._node_index)
+
+    def _merge(graph_node: MindNode, md_node: MindNode | None) -> MindNode:
+        """Recursively merge a graph node with an md node.
+
+        Returns the merged node (modified in-place on graph_node).
+        """
+        if md_node is not None:
+            was_hidden = graph_node.hidden  # save BEFORE update
+
+            # Update content and hidden flag from .md
+            graph_node.content = md_node.content
+            graph_node.hidden = md_node.hidden
+
+            # Build index of graph children by ID
+            graph_children = {c.id: c for c in graph_node.children}
+            new_children: list[MindNode] = []
+
+            for md_child in md_node.children:
+                if md_child.id in graph_children:
+                    merged = _merge(graph_children[md_child.id], md_child)
+                else:
+                    merged = _copy_node(md_child)
+                new_children.append(merged)
+                merged.parent = graph_node
+
+            # Restore children from graph when hidden state changed
+            if was_hidden and not graph_node.hidden:
+                # Unhide: restore graph children if .md had none
+                if not new_children and graph_node.children:
+                    new_children = [_copy_node(c) for c in graph_node.children]
+                    for c in new_children:
+                        c.parent = graph_node
+            elif graph_node.hidden:
+                # Stays hidden or newly hidden: preserve graph children
+                if not new_children and graph_node.children:
+                    new_children = [_copy_node(c) for c in graph_node.children]
+                    for c in new_children:
+                        c.parent = graph_node
+
+            graph_node.children = new_children
+        # If md_node is None: keep graph_node as-is
+
+        return graph_node
+
+    _merge(graph.root, md_tree.root)
+
+    # Rebuild index
+    graph._node_index = {}
+    _reindex(graph.root, graph._node_index)
+    return graph
+
+
+def _copy_node(node: MindNode) -> MindNode:
+    """Deep copy a MindNode without parent references."""
+    new = MindNode(
+        id=node.id,
+        content=node.content,
+        author=node.author,
+        depth=node.depth,
+        hidden=node.hidden,
+    )
+    for child in node.children:
+        c = _copy_node(child)
+        new.add_child(c)
+    return new
+
+
+def _reindex(node: MindNode, index: dict[str, MindNode]) -> None:
+    """Recursively populate node index."""
+    index[node.id] = node
+    for child in node.children:
+        _reindex(child, index)
 
 
 # ── Renderer ────────────────────────────────────────────────────────────────
@@ -251,32 +409,29 @@ def render_tree(tree: MindTree) -> str:
 
 
 def render_mermaid(tree: MindTree) -> str:
-    """Render tree as a Mermaid graph (mindmap type).
-
-    Returns markdown with ```mermaid block.
-    """
+    """Render tree as a Mermaid graph (mindmap type)."""
     lines = ["```mermaid", "mindmap"]
-    # Track IDs to avoid duplicates
-    ids: dict[str, str] = {}
-    counter = [0]
 
-    def _short_id(node: MindNode) -> str:
-        if node.id not in ids:
-            ids[node.id] = f"N{counter[0]}"
-            counter[0] += 1
-        return ids[node.id]
-
-    def _walk(node: MindNode, depth: int) -> None:
-        indent = "  " * depth
-        tag = "🟢" if node.is_user else "🔵" if node.is_agent else "📌"
-        content = node.content[:60].replace('"', "'")
-        lines.append(f"{indent}{tag} {content}")
+    def _walk(node: MindNode, indent: str) -> None:
+        if node is tree.root:
+            lines.append(f"  {indent}{_sanitize(node.content)}")
+        else:
+            tag = "👤" if node.is_user else "🤖"
+            marker = "📦" if node.hidden else tag
+            lines.append(f"  {indent}{marker} {_sanitize(node.content)}")
+        if node.hidden:
+            return
         for child in node.children:
-            _walk(child, depth + 1)
+            _walk(child, indent + "  ")
 
-    _walk(tree.root, 1)
+    _walk(tree.root, "")
     lines.append("```")
     return "\n".join(lines)
+
+
+def _sanitize(text: str) -> str:
+    """Remove Mermaid-breaking characters from a single line."""
+    return text.replace("\n", " ").replace('"', "'").replace("(", "[").replace(")", "]")[:80]
 
 
 # ── Block extraction from markdown ──────────────────────────────────────────
@@ -302,14 +457,41 @@ def replace_block(text: str, new_block: str) -> str:
             text += "\n"
         return text + "\n" + new_block
 
-    # Search for closing ``` AFTER the opening line
+    # Find end of the block — search AFTER the opening line
     search_from = text.find("\n", start) + 1
-    end = text.find(BLOCK_END, search_from)
+    end = text.find(f"\n{BLOCK_END}", search_from)
     if end == -1:
-        return text
-
-    end += len(BLOCK_END)
-    if end < len(text) and text[end] == "\n":
-        end += 1
+        # Block at end of file without proper closing
+        end = len(text)
+    else:
+        end += 1 + len(BLOCK_END)  # include the closing ```
 
     return text[:start] + new_block.rstrip("\n") + "\n" + text[end:]
+
+
+# ── JSON sidecar ────────────────────────────────────────────────────────────
+
+
+def graph_path(md_path: str) -> str:
+    """Compute sidecar .graph.json path for a given .md file."""
+    return md_path.replace(".md", ".md_graph.json")
+
+
+def load_graph(md_path: str) -> MindTree | None:
+    """Load full graph from .graph.json sidecar. Returns None if missing."""
+    gp = graph_path(md_path)
+    try:
+        with open(gp) as f:
+            data = json.load(f)
+        return MindTree.from_dict(data)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+
+
+def save_graph(tree: MindTree, md_path: str) -> None:
+    """Save full graph to .graph.json sidecar."""
+    gp = graph_path(md_path)
+    data = tree.to_dict()
+    with open(gp, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")

@@ -131,9 +131,10 @@ class TestParseMindmap:
         with pytest.raises(ValueError, match="multiple of 2"):
             parse_mindmap(_md("root: R\n * Q\n"))
 
-    def test_bad_prefix_raises(self) -> None:
-        with pytest.raises(ValueError, match="must start with"):
-            parse_mindmap(_md("root: R\nbad\n"))
+    def test_bare_word_becomes_continuation(self) -> None:
+        """Non-tag lines are appended as continuation to parent."""
+        tree = parse_mindmap(_md("root: R\nbare word\n"))
+        assert "bare word" in tree.root.content
 
     def test_orphan_raises(self) -> None:
         with pytest.raises(ValueError, match="No parent"):

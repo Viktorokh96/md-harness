@@ -19,11 +19,12 @@ from agents import Agent, RunContextWrapper, Runner, function_tool, set_tracing_
 
 from tree_engine import (
     MindTree,
+    load_graph,
     parse_mindmap,
     replace_block,
+    save_graph,
     serialize_mindmap,
 )
-
 # ── Setup ───────────────────────────────────────────────────────────────────
 
 if os.environ.get("DISABLE_TRACING", "1") != "0":
@@ -55,13 +56,19 @@ class ControlRoomContext:
 
 
 def _read_tree(ctx: ControlRoomContext) -> MindTree:
-    """Parse the mindmap tree from the context's file."""
-    content = ctx.file_path.read_text()
-    return parse_mindmap(content)
+    """Parse the mindmap tree — from .graph.json if available, else .md."""
+    tree = load_graph(str(ctx.file_path))
+    if tree is not None:
+        return tree
+    # Fallback: parse from .md (first run, no .graph.json yet)
+    return parse_mindmap(ctx.file_path.read_text())
 
 
 def _write_tree(ctx: ControlRoomContext, tree: MindTree) -> None:
-    """Serialize tree back into the file."""
+    """Serialize tree to both .md (visible nodes) and .graph.json (full tree)."""
+    # Save full graph
+    save_graph(tree, str(ctx.file_path))
+    # Write visible part to .md
     content = ctx.file_path.read_text()
     block = serialize_mindmap(tree)
     new_content = replace_block(content, block)

@@ -1,32 +1,85 @@
 # CONTROL ROOM
 
-LLM-powered mind map dialogue. You write in a markdown file, an AI agent reads the diff, responds in the same file.
+LLM-powered tree-structured mind map dialogue. You write in a markdown file inside an ` ```agentsmindmap ` block, a watcher detects changes, and an AI agent responds by adding reply nodes into the same tree.
 
-```
-* Build a weather CLI                     <- you (depth 0)
-	[*] Analyzing requirements...            <- agent (depth 1)
-		[*] ❓ Python or Rust?                 <- agent asks (depth 2)
-			* Python                             <- you answer (depth 3)
-		[*] ✅ Using Python                    <- agent confirms (depth 2)
-	[*] ▶ reading pyproject.toml             <- agent acts (depth 1)
-```
-
-## Quick start
+## Quick Start
 
 ```bash
-# 1. Install
 pip install openai-agents>=0.18
 
-# 2. Configure API key
+# Configure API key
 echo 'OPENAI_API_KEY=sk-...' > .env
-echo 'OPENAI_BASE_URL=https://api.deepseek.com/v1' >> .env  # for DeepSeek
+echo 'OPENAI_BASE_URL=https://api.deepseek.com/v1' >> .env
 echo 'LLM_MODEL=deepseek-v4-flash' >> .env
 
-# 3. Start watching
+# Start watching
 python3 watcher.py
 
 # Then edit CONTROL_ROOM.md — the agent responds automatically.
 ```
+
+## Format: ```agentsmindmap block
+
+The dialogue lives in a fenced code block inside any markdown file:
+
+````markdown
+# CONTROL ROOM
+
+```agentsmindmap
+root: ROOM NAME
+* user message
+  [*] agent reply
+    * follow-up question
+      [*] deeper reply
+* another topic
+```
+````
+
+| Prefix | Meaning |
+|--------|---------|
+| `root:` | Root node — the room name (required first line) |
+| `*` | User message |
+| `[*]` | Agent reply |
+| 2 spaces | One nesting level deeper |
+
+Node IDs are dot-separated paths: `root.1`, `root.1.1`, `root.1.1.1`, etc.
+
+## Hiding branches: `[hide]`
+
+Add `[hide]` right after the tag to collapse a branch:
+
+```
+*[hide] Summary of archived discussion
+[*][hide] Archived analysis
+```
+
+- **Hidden branches** appear as a single summary line in the markdown — children are collapsed.
+- **Full tree is preserved** in a `.graph.json` sidecar file.
+- **Toggle is instant**: adding/removing `[hide]` is processed by the preprocessor without calling the LLM.
+- **Unhide restores**: removing `[hide]` brings the full subtree back from `.graph.json`.
+
+Example workflow:
+
+```bash
+# Hide a branch (LLM not called)
+echo '*[hide] Archived topic' >> CONTROL_ROOM.md
+
+# Unhide — full subtree restored (LLM not called)
+# (remove [hide] from the line)
+```
+
+## Multi-line content
+
+Content can span multiple lines via continuation indentation:
+
+```
+* First line of a longer thought
+  continues here at same visual level
+  and here
+  [*] Agent reply
+```
+
+Continuation lines are appended to the parent node's content with newlines.
 
 ## CLI
 
@@ -38,76 +91,85 @@ python3 watcher.py [file] [--once] [--dry-run] [--model MODEL] [--interval SEC]
   --once        Process once and exit.
   --dry-run     Show diff, don't call LLM.
   --model       Override LLM_MODEL from .env.
-  --interval    Poll interval in seconds (default: 1.0).
+  --interval    Poll interval in seconds (default: 2.0).
 ```
-
-## Message format
-
-| Prefix | Source | Example |
-|---|---|---|
-| `*` | User | `* Build a calculator` |
-| `[*]` | Agent | `[*] Analyzing requirements...` |
-| `[*] ❓` | Agent question | `[*] ❓ Python or Rust?` |
-| `[*] ▶` | Agent action | `[*] ▶ grep -r "calc" .` |
-| `[*] ✅` | Agent conclusion | `[*] ✅ Done — calc.py created` |
-
-Tab characters (`\t`) create nesting. Reply one level deeper than the message you're addressing.
 
 ## Architecture
 
 ```
-watcher.py          poll-based file monitor (mtime, 1s interval)
-    │
-    ├── change detected → compute diff
-    ├── writes [*] ...thinking... placeholder
-    ├── runs ControlRoom agent (OpenAI Agents SDK)
-    │   ├── read_file("CONTROL_ROOM.md")  — full context
-    │   ├── delegate_task → Worker agent  — Agent.as_tool()
-    │   │   ├── run_shell()               — shell commands
-    │   │   └── read_file()               — file inspection
-    │   ├── append_to_control_room()      — write response
-    │   └── stay_silent()                 — skip
-    └── removes placeholder
+CONTROL_ROOM.md ──→ watcher.py (poll mtime, 2s interval)
+                     │
+                     ├── diff contains [hide]-only changes?
+                     │   YES → preprocessor updates .graph.json, re-renders .md
+                     │   NO  → LLM agent runs
+                     │
+                     ├── agent.py (OpenAI Agents SDK)
+                     │   ├── read_mindmap()     — outline from .graph.json
+                     │   ├── add_reply(id, txt) — insert node + save both files
+                     │   ├── find_nodes(q)      — search tree
+                     │   ├── stay_silent()      — no response needed
+                     │   ├── run_shell(cmd)     — execute commands
+                     │   ├── read_file(path)    — inspect files
+                     │   └── delegate_task(t)   — Worker sub-agent
+                     │
+                     ├── tree_engine.py (preprocessor)
+                     │   ├── parse_mindmap()    — ```agentsmindmap → MindTree
+                     │   ├── serialize_mindmap()— MindTree → ```agentsmindmap
+                     │   ├── to_dict/from_dict  — JSON for .graph.json
+                     │   └── merge_md_into_graph() — sync .md → .graph.json
+                     │
+                     └── .CONTROL_ROOM.md_graph.json  (full tree, incl. hidden)
 ```
+
+### Data flow
+
+1. **User edits `.md`** — adds nodes, toggles `[hide]`
+2. **Watcher detects change** → `_sync_graph()`:
+   - Parses `.md` → visible tree
+   - Loads `.graph.json` → full tree
+   - Merges: `.md` is authoritative for content + hidden flags; `.graph.json` preserves hidden children
+   - Saves merged tree to `.graph.json`, re-renders visible part to `.md`
+3. **If `[hide]`-only diff** → done (no LLM)
+4. **Otherwise** → agent sees full tree (from `.graph.json`), adds replies, both files updated
 
 ### Agent tools
 
 | Tool | Description |
-|---|---|
-| `append_to_control_room(text)` | Append `[*]` lines to mind map |
-| `stay_silent()` | Explicit no-op |
+|------|-------------|
+| `read_mindmap()` | Outline of tree with node IDs (📦 marks hidden nodes) |
+| `add_reply(parent_id, content)` | Add a child node under `parent_id` |
+| `find_nodes(query)` | Case-insensitive subtree search |
+| `stay_silent()` | Skip — no response needed |
 | `run_shell(command)` | Execute shell in project root |
 | `read_file(path)` | Read any project file |
-| `delegate_task(task)` | Delegate to Worker sub-agent |
-
-### Worker sub-agent
-
-A separate `Agent` converted to a tool via `Agent.as_tool()`. Has `run_shell` + `read_file`.
-Receives a task description, executes it, returns a plain-text summary.
-The ControlRoom agent decides what to write to the mind map.
+| `delegate_task(task)` | Delegate multi-step work to Worker sub-agent |
 
 ## Files
 
 ```
 inline-vibe/
-├── CONTROL_ROOM.md       # Mind map dialogue (user-owned)
-├── CONTROL_ROOM_TEST.md  # Test file (for development)
-├── agent.py              # Agent definition + tools (OpenAI Agents SDK)
-├── watcher.py            # File watcher + CLI entry point
-├── pyproject.toml        # Dependencies
-├── .env                  # API keys (gitignored)
-├── .env.example          # Template
-├── .gitignore
-├── AGENTS.md             # Instructions for LLM agents
-└── README.md             # This file
+├── CONTROL_ROOM.md                    # Mind map dialogue (user-owned, visible tree)
+├── .CONTROL_ROOM.md_graph.json        # Full tree sidecar (includes hidden subtrees)
+├── agent.py                           # Agent definition + 7 tools (OpenAI Agents SDK)
+├── watcher.py                         # File watcher + graph sync + CLI
+├── tree_engine.py                     # Parser, serializer, renderer, merge, JSON
+├── tests/                             # Test suite (85 tests)
+│   ├── test_tree_engine.py
+│   ├── test_agent.py
+│   ├── test_watcher.py
+│   └── test_graph.py                  # [hide] + JSON + sync tests
+├── pyproject.toml
+├── .env                               # API keys (gitignored)
+├── .env.example
+└── .gitignore
 ```
 
-## Environment variables
+## Environment Variables
 
-Loaded from `.env` file, overridable by environment:
+Loaded from `.env`, overridable by environment:
 
 | Variable | Default | Description |
-|---|---|---|
+|----------|---------|-------------|
 | `OPENAI_API_KEY` | — | API key (required) |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL |
 | `LLM_MODEL` | `gpt-4o-mini` | Model name |
@@ -116,6 +178,9 @@ Loaded from `.env` file, overridable by environment:
 ## Development
 
 ```bash
+# Run tests
+python3 -m pytest tests/ -v
+
 # Test on a separate file
 python3 watcher.py CONTROL_ROOM_TEST.md --once
 
@@ -126,9 +191,10 @@ python3 watcher.py CONTROL_ROOM_TEST.md --once --dry-run
 python3 watcher.py CONTROL_ROOM_TEST.md --interval 0.5
 ```
 
-### Design decisions
+## Design Decisions
 
-- **Poll, not inotify**: simpler, cross-platform, no dependencies. 1-second poll is fast enough for human-paced dialogue.
-- **Line-based diff, not unified**: optimized for LLM readability. Three branches: append, truncate, inline changes.
-- **Agent thinks first, speaks later**: placeholder `[*] ...thinking...` gives instant feedback, then gets cleaned up.
-- **Worker via `as_tool()`, not handoff**: ControlRoom stays in control. Worker does the research, ControlRoom decides what to say.
+- **Tree, not flat log**: branching conversations possible; stable node IDs for addressing.
+- **`.graph.json` sidecar**: full tree including hidden branches — `.md` is a VIEW into the graph.
+- **`[hide]` as preprocessor-only**: no LLM cost for toggling visibility; instant feedback.
+- **Poll-based watcher**: simpler than inotify, cross-platform, 2s is fast enough for human-paced dialogue.
+- **Worker via `Agent.as_tool()`**: ControlRoom stays in control; Worker does research, ControlRoom decides what to say.
