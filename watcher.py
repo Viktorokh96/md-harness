@@ -113,7 +113,8 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
     full = load_graph(md_path)
     if full is None:
         full = md_tree
-    merged = merge_md_into_graph(full, md_tree)
+
+    old_archived = {n.id for n in full.all_nodes() if n.archived}
 
     # Handle unarchive (restore)
     for node in merged.all_nodes():
