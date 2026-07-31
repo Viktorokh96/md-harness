@@ -403,3 +403,113 @@ class TestDetachAttach:
         tree.attach_subtree("root", sub)
         assert tree.get_node("root.1.1") is not None
         assert tree.get_node("root.1.1").content == "Reply"
+
+
+# ── Renderer tests ──────────────────────────────────────────────────────────
+
+
+class TestRenderMermaid:
+    def test_basic(self) -> None:
+        from tree_engine import render_mermaid
+        tree = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
+        result = render_mermaid(tree)
+        assert "```mermaid" in result
+        assert "mindmap" in result
+        assert "Q" in result
+        assert "A" in result
+
+    def test_hidden_nodes(self) -> None:
+        from tree_engine import render_mermaid
+        tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] Secret\n"))
+        result = render_mermaid(tree)
+        assert "📦" in result or "H" in result
+        assert "Secret" not in result  # hidden children excluded
+
+    def test_archived_nodes(self) -> None:
+        from tree_engine import render_mermaid
+        tree = parse_mindmap(_md("root: R\n*[archive] Old\n  [*] Gone\n"))
+        result = render_mermaid(tree)
+        assert "🗄" in result
+        assert "Gone" not in result  # archived children excluded
+
+
+class TestExtractBlock:
+    def test_extracts(self) -> None:
+        from tree_engine import extract_block
+        text = "# H\n\n```agentsmindmap\nroot: R\n* Q\n```\nfooter\n"
+        block = extract_block(text)
+        assert block is not None
+        assert "root: R" in block
+        assert "* Q" in block
+
+    def test_no_block(self) -> None:
+        from tree_engine import extract_block
+        assert extract_block("# Just text\n") is None
+
+    def test_unclosed(self) -> None:
+        from tree_engine import extract_block
+        assert extract_block("# H\n```agentsmindmap\nroot: R\n") is None
+
+
+# ── E2E hide cycle ──────────────────────────────────────────────────────────
+
+
+class TestHideCycleE2E:
+    """Simulate the full watcher flow: message → hide → unhide."""
+
+    def test_hide_preserves_children_in_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = Path(tmp) / "test.md"
+
+            # Simulate: agent responded, graph has child
+            full_tree = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
+            save_graph(full_tree, str(md_path))
+            md_path.write_text(_md("root: R\n* Q\n  [*] A\n"))
+
+            # User adds [hide]
+            md_path.write_text(_md("root: R\n*[hide] Q\n"))
+
+            # Load graphs
+            old = load_graph(str(md_path))
+            assert old is not None
+
+            # Sync (merge .md into .graph)
+            md_tree = parse_mindmap(md_path.read_text())
+            merged = merge_md_into_graph(old, md_tree)
+            save_graph(merged, str(md_path))
+
+            new = load_graph(str(md_path))
+            assert new is not None
+
+            # diff_trees should see only hidden flag change — no content change
+            has_change, diff = diff_trees(old, new)
+            assert not has_change, f"Hide should NOT be content change, got: {diff}"
+            assert new.get_node("root.1") is not None
+            assert new.get_node("root.1").hidden
+            # Child should be preserved
+            assert new.get_node("root.1.1") is not None
+            assert new.get_node("root.1.1").content == "A"
+
+    def test_unhide_restores_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = Path(tmp) / "test.md"
+
+            # Start with hidden node + child in graph
+            full_tree = parse_mindmap(_md("root: R\n*[hide] Q\n  [*] A\n"))
+            save_graph(full_tree, str(md_path))
+            md_path.write_text(_md("root: R\n*[hide] Q\n"))
+
+            old = load_graph(str(md_path))
+            assert old is not None
+
+            # User removes [hide]
+            md_path.write_text(_md("root: R\n* Q\n"))
+            md_tree = parse_mindmap(md_path.read_text())
+            merged = merge_md_into_graph(old, md_tree)
+            save_graph(merged, str(md_path))
+
+            new = load_graph(str(md_path))
+            assert new is not None
+            assert not new.get_node("root.1").hidden
+            assert new.get_node("root.1.1") is not None
+            assert new.get_node("root.1.1").content == "A"

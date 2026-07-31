@@ -141,36 +141,35 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     new_content = fpath.read_text()
     old_content = ctx.last_content or ""
 
+    # Parse .md trees for initial validation
     try:
-        old_tree = parse_mindmap(old_content) if old_content else None
-        new_tree = parse_mindmap(new_content)
+        parse_mindmap(new_content)
     except ValueError:
         print("[watcher] Could not parse mindmap block — skipping.")
         return
+
+    # Load old graph BEFORE sync (to compare against)
+    md_path = str(fpath)
+    old_graph = load_graph(md_path)
 
     synced_content = _sync_graph(ctx)
     ctx.last_content = synced_content
     ctx.last_mtime = fpath.stat().st_mtime
 
+    # Compare old graph vs new graph (after merge) for structural diff
+    new_graph = load_graph(md_path)
     has_change = False
     diff_text = ""
-    if old_tree is not None:
-        has_change, diff_text = diff_trees(old_tree, new_tree)
-    else:
-        has_change = len(new_tree.all_nodes()) > 1
+    if old_graph is not None and new_graph is not None:
+        has_change, diff_text = diff_trees(old_graph, new_graph)
+    elif new_graph is not None:
+        has_change = len(new_graph.all_nodes()) > 1
         if has_change:
-            diff_text = f"Initial tree with {len(new_tree.all_nodes())} nodes."
-
-    context_lines = synced_content.splitlines()[-40:]
-    print(f"[watcher] Processing {fpath.name} ({len(context_lines)} lines)...")
-    for ln in context_lines[:8]:
-        print(f"  | {ln}")
-    if len(context_lines) > 8:
-        print(f"  ... ({len(context_lines) - 8} more lines)")
-
+            diff_text = f"Initial tree with {len(new_graph.all_nodes())} nodes."
     if diff_text:
         print(f"\n[watcher] Diff:\n{diff_text}")
 
+    context_lines = synced_content.splitlines()[-40:]
     if dry_run:
         print("[watcher] Dry run — skipping agent call.")
         return
@@ -191,8 +190,8 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
 
 def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     """Watch the mind map file continuously using inotify (via watchfiles)."""
-    print("[watcher] Press Ctrl+C to stop.\n")
-
+    fpath = ctx.file_path.resolve()
+    print(f"[watcher] Watching {fpath.name} (inotify, real-time)...")
     if fpath.exists():
         ctx.last_content = fpath.read_text()
         ctx.last_mtime = fpath.stat().st_mtime
