@@ -56,8 +56,7 @@ root: CONTROL ROOM
 ```
 """
 
-# ── Placeholder ─────────────────────────────────────────────────────────────
-
+THINKING_MARKER = "[*] ...thinking..."
 
 def _append_placeholder(ctx: ControlRoomContext) -> str:
     """Write [*] ...thinking... as temporary visual feedback."""
