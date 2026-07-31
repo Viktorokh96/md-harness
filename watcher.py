@@ -15,17 +15,11 @@ import argparse
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from watchfiles import Change, watch
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-ENV_FILE = PROJECT_ROOT / ".env"
-
-if ENV_FILE.exists():
-    for line in ENV_FILE.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, val = line.partition("=")
-            os.environ[key.strip()] = val.strip()
+load_dotenv(PROJECT_ROOT / ".env")
 
 from agent import (
     CONTROL_ROOM,
@@ -103,23 +97,28 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
         save_graph(md_tree, md_path)
         return md_text
 
-    # Detect archive/unarchive before merge
+    # Detect [archive] / unarchive BEFORE merge (children still intact)
+    from archiver import archive_branch, restore_branch
+
+    # Find newly archived nodes: in md_tree but not archived in full
+    for node in md_tree.all_nodes():
+        full_node = full.get_node(node.id)
+        if node.archived and (full_node is None or not full_node.archived):
+            # Newly archived — detach subtree from full while children exist
+            if full_node is not None and full_node.children:
+                print(f"[watcher] Archiving branch {node.id}...")
+                archive_branch(md_path, node.id, node.archive_reason)
+
     old_archived = {n.id for n in full.all_nodes() if n.archived}
 
     merged = merge_md_into_graph(full, md_tree)
     save_graph(merged, md_path)
 
-    # Handle [archive] changes
-    from archiver import archive_branch, restore_branch
+    # Handle unarchive (restore)
     for node in merged.all_nodes():
         if node is merged.root:
             continue
-        if node.archived and node.children:
-            # Newly archived — detach children via archiver
-            print(f"[watcher] Archiving branch {node.id}...")
-            archive_branch(md_path, node.id, node.archive_reason)
-        elif not node.archived and node.id in old_archived:
-            # Unarchived — restore from archive/
+        if not node.archived and node.id in old_archived:
             print(f"[watcher] Restoring branch {node.id}...")
             restore_branch(md_path, node.id)
 
@@ -127,9 +126,6 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
     new_content = replace_block(md_text, block)
     ctx.file_path.write_text(new_content)
     return new_content
-
-def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
-    """Process current state of CONTROL_ROOM.md once."""
     fpath = ctx.file_path
     if not fpath.exists():
         fpath.write_text("# CONTROL ROOM\n\n")
@@ -192,8 +188,7 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     ctx.last_mtime = fpath.stat().st_mtime
 
 
-def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False, interval: float = 2.0) -> None:
-    """Watch the mind map file continuously using inotify (via watchfiles)."""
+def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     fpath = ctx.file_path.resolve()
     print(f"[watcher] Watching {fpath.name} (inotify, real-time)...")
     print("[watcher] Press Ctrl+C to stop.\n")
@@ -240,7 +235,6 @@ def main() -> None:
     parser.add_argument("--once", "-1", action="store_true", help="Process once and exit.")
     parser.add_argument("--dry-run", "-n", action="store_true", help="Show diff without calling the agent.")
     parser.add_argument("--model", "-m", default=None, help="Override LLM model.")
-    parser.add_argument("--interval", "-i", type=float, default=2.0, help="Poll interval (default: 2.0).")
 
     args = parser.parse_args()
     agent = create_agent(model=args.model)
@@ -249,7 +243,7 @@ def main() -> None:
     if args.once:
         run_once(agent, ctx, dry_run=args.dry_run)
     else:
-        run_watch(agent, ctx, dry_run=args.dry_run, interval=args.interval)
+        run_watch(agent, ctx, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

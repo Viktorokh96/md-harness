@@ -185,13 +185,11 @@ def restore_branch(md_path: str, node_id: str) -> bool:
     tree._node_index.pop(node_id, None)
 
     # Attach restored subtree
-    tree.attach_subtree(parent.id, subtree)
+    restored_node = tree.attach_subtree(parent.id, subtree)
 
-    # Remove archived flag, set content from subtree root
-    restored = tree.get_node(tree.root.children[-1].id if tree.root.children else "")
-    if restored:
-        restored.archived = False
-        restored.archive_reason = ""
+    # Remove archived flag from restored node
+    restored_node.archived = False
+    restored_node.archive_reason = ""
 
     save_graph(tree, md_path)
     md_text = Path(md_path).read_text()

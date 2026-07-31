@@ -109,14 +109,13 @@ Continuation lines are appended to the parent node's content with newlines.
 ## CLI
 
 ```
-python3 watcher.py [file] [--once] [--dry-run] [--model MODEL] [--interval SEC]
+python3 watcher.py [file] [--once] [--dry-run] [--model MODEL]
 
   file          Mind map file (default: CONTROL_ROOM.md)
                 Created from template if missing.
   --once        Process once and exit.
   --dry-run     Show diff, don't call LLM.
   --model       Override LLM_MODEL from .env.
-  --interval    Poll interval in seconds (unused in watch mode — inotify is real-time).
 ```
 
 ## Architecture
@@ -212,8 +211,7 @@ python3 watcher.py CONTROL_ROOM_TEST.md --once
 python3 watcher.py CONTROL_ROOM_TEST.md --once --dry-run
 
 # Watch mode
-python3 watcher.py CONTROL_ROOM_TEST.md --interval 0.5
-```
+python3 watcher.py CONTROL_ROOM_TEST.md
 
 ## Design Decisions
 

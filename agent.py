@@ -181,7 +181,10 @@ def read_file(
     """Read a project file. Path is relative to project root."""
     root = wrapper.context.file_path.parent
     target = (root / filepath).resolve()
-    if not str(target).startswith(str(root)):
+    root_resolved = root.resolve()
+    try:
+        target.relative_to(root_resolved)
+    except ValueError:
         return f"ERROR: path escapes project root: {filepath}"
     if not target.exists():
         return f"ERROR: file not found: {filepath}"
@@ -355,9 +358,11 @@ FIRST: call `read_mindmap()` to see the full tree with node IDs.
 THEN: find the user message that was added, and reply with `add_reply()`.
 Or call `stay_silent()` if no response is needed."""
 
-    result = Runner.run_sync(agent, prompt, context=ctx, max_turns=30)
-    return result.final_output
-
+    try:
+        result = Runner.run_sync(agent, prompt, context=ctx, max_turns=30)
+        return result.final_output
+    except Exception as exc:
+        return f"Agent error: {exc}"
 
 # ── Smoke test ──────────────────────────────────────────────────────────────
 
