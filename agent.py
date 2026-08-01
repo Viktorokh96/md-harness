@@ -165,12 +165,12 @@ def run_shell(
     timeout: int = 120,
 ) -> str:
     """Execute a shell command. Returns stdout/stderr/exit code."""
+    try:
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True,
             timeout=timeout, cwd=wrapper.context.file_path.parent,
         )
         out = result.stdout.strip()
-        err = result.stderr.strip()
         parts = []
         if out:
             parts.append(out)
