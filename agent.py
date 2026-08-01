@@ -374,12 +374,10 @@ THEN: find the user message that was added, and reply with `add_reply()`.
 Or call `stay_silent()` if no response is needed."""
 
     try:
-        result = Runner.run_sync(agent, prompt, context=ctx, max_turns=60)
+        result = Runner.run_sync(agent, prompt, context=ctx, max_turns=100)
         return result.final_output
     except Exception as exc:
         return f"Agent error: {exc}"
-# ── Smoke test ──────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     ctx = ControlRoomContext()
     if CONTROL_ROOM.exists():
