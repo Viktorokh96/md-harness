@@ -162,10 +162,9 @@ def run_shell(
     wrapper: RunContextWrapper[ControlRoomContext],
     command: str,
     *,
-    timeout: int = 30,
+    timeout: int = 120,
 ) -> str:
     """Execute a shell command. Returns stdout/stderr/exit code."""
-    try:
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True,
             timeout=timeout, cwd=wrapper.context.file_path.parent,
@@ -375,11 +374,10 @@ THEN: find the user message that was added, and reply with `add_reply()`.
 Or call `stay_silent()` if no response is needed."""
 
     try:
-        result = Runner.run_sync(agent, prompt, context=ctx, max_turns=30)
+        result = Runner.run_sync(agent, prompt, context=ctx, max_turns=60)
         return result.final_output
     except Exception as exc:
         return f"Agent error: {exc}"
-
 # ── Smoke test ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

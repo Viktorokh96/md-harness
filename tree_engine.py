@@ -164,6 +164,7 @@ class MindTree:
         return node
 
     def to_outline(self, *, show_hidden: bool = True) -> str:
+        """Indented outline with node IDs. 🗄=archived, 📦=hidden."""
         lines: list[str] = []
 
         def _walk(node: MindNode, indent: int) -> None:
@@ -171,12 +172,7 @@ class MindTree:
             if node is self.root:
                 lines.append(f"📌 [{node.id}] {node.content}")
             else:
-                if node.archived:
-                    marker = "🗄"
-                elif node.hidden:
-                    marker = "📦"
-                else:
-                    marker = "*" if node.is_user else "[*]"
+                marker = "🗄" if node.archived else ("📦" if node.hidden else ("*" if node.is_user else "[*]"))
                 lines.append(f"{prefix}{marker} [{node.id}] {node.content}")
             if (node.hidden or node.archived) and not show_hidden:
                 return
@@ -185,7 +181,6 @@ class MindTree:
 
         _walk(self.root, 0)
         return "\n".join(lines)
-
     def to_dict(self) -> dict[str, Any]:
         def _node_to_dict(node: MindNode) -> dict[str, Any]:
             d: dict[str, Any] = {
