@@ -71,10 +71,10 @@ def summarize(tree: MindTree, node_id: str) -> str:
             max_tokens=50,
             temperature=0.3,
         )
-        return resp.choices[0].message.content.strip() if resp.choices else ""
+        text = resp.choices[0].message.content
+        return text.strip() if text and text.strip() else node.content[:80]
     except Exception:
         return node.content[:80]
-
 
 # ── Archive ─────────────────────────────────────────────────────────────────
 
@@ -93,7 +93,8 @@ def archive_branch(md_path: str, node_id: str, manual_summary: str = "") -> str:
         return f"Error: node {node_id} not found"
 
     summary = manual_summary or summarize(tree, node_id)
-
+    if not summary:
+        summary = node.content[:80]
     # Save metadata BEFORE detach (detach sets node.parent = None)
     parent = node.parent
     author = node.author
