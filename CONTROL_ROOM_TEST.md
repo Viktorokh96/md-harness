@@ -1,11 +1,7 @@
-# CONTROL ROOM
-
-> `*` сообщение · `[*]` ответ · `*[hide]` скрыть · `*[archive]` архивировать
-
-----
+# H
 
 ```agentsmindmap
-root: CONTROL ROOM
-* Вопрос
-  [*][archive] Длинный ответ с деталями
+root: R
+* Q1
+* NEW
 ```

@@ -139,24 +139,18 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
         return
 
     new_content = fpath.read_text()
-    old_content = ctx.last_content or ""
-
-    # Parse .md trees for initial validation
     try:
         parse_mindmap(new_content)
     except ValueError:
         print("[watcher] Could not parse mindmap block — skipping.")
         return
 
-    # Load old graph BEFORE sync (to compare against)
     md_path = str(fpath)
     old_graph = load_graph(md_path)
-
     synced_content = _sync_graph(ctx)
     ctx.last_content = synced_content
     ctx.last_mtime = fpath.stat().st_mtime
 
-    # Compare old graph vs new graph (after merge) for structural diff
     new_graph = load_graph(md_path)
     has_change = False
     diff_text = ""
@@ -166,14 +160,20 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
         has_change = len(new_graph.all_nodes()) > 1
         if has_change:
             diff_text = f"Initial tree with {len(new_graph.all_nodes())} nodes."
+
+    context_lines = synced_content.splitlines()[-40:]
+    node_count = len(new_graph.all_nodes()) if new_graph else 0
+    print(f"[watcher] Processing {fpath.name} ({len(context_lines)} lines, {node_count} nodes)...")
+    for ln in context_lines[:8]:
+        print(f"  | {ln}")
+    if len(context_lines) > 8:
+        print(f"  ... ({len(context_lines) - 8} more lines)")
     if diff_text:
         print(f"\n[watcher] Diff:\n{diff_text}")
 
-    context_lines = synced_content.splitlines()[-40:]
     if dry_run:
         print("[watcher] Dry run — skipping agent call.")
         return
-
     if not has_change:
         print("[watcher] No content change — skipping LLM.")
         return
@@ -182,7 +182,6 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     print("[watcher] Running agent...")
     result = process_change(agent, ctx, diff_text, context_lines)
     print(f"[watcher] Agent finished: {result[:300]}")
-
     _remove_thinking_markers(ctx)
     ctx.last_content = fpath.read_text()
     ctx.last_mtime = fpath.stat().st_mtime
@@ -192,6 +191,8 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     """Watch the mind map file continuously using inotify (via watchfiles)."""
     fpath = ctx.file_path.resolve()
     print(f"[watcher] Watching {fpath.name} (inotify, real-time)...")
+    print("[watcher] Press Ctrl+C to stop.\n")
+
     if fpath.exists():
         ctx.last_content = fpath.read_text()
         ctx.last_mtime = fpath.stat().st_mtime
@@ -203,7 +204,6 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
 
     try:
         for changes in watch(fpath.parent):
-            # Filter: only care about our target file
             for change_type, path in changes:
                 if Path(path).resolve() != fpath:
                     continue
@@ -211,17 +211,13 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
                     continue
                 if not fpath.exists():
                     continue
-
                 content = fpath.read_text()
                 if content == ctx.last_content:
-                    continue  # debounce: same content, likely double-write
-
+                    continue
                 run_once(agent, ctx, dry_run=dry_run)
-                break  # one trigger per batch
+                break
     except KeyboardInterrupt:
         print("\n[watcher] Stopped.")
-# ── CLI ─────────────────────────────────────────────────────────────────────
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
