@@ -147,11 +147,17 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
 
     md_path = str(fpath)
     old_graph = load_graph(md_path)
+    old_count = len(old_graph.all_nodes()) if old_graph else 0
+    print(f"[watcher] old_graph: {old_count} nodes")
+
     synced_content = _sync_graph(ctx)
     ctx.last_content = synced_content
     ctx.last_mtime = fpath.stat().st_mtime
 
     new_graph = load_graph(md_path)
+    new_count = len(new_graph.all_nodes()) if new_graph else 0
+    print(f"[watcher] new_graph: {new_count} nodes")
+
     has_change = False
     diff_text = ""
     if old_graph is not None and new_graph is not None:
@@ -166,8 +172,6 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     print(f"[watcher] Processing {fpath.name} ({len(context_lines)} lines, {node_count} nodes)...")
     for ln in context_lines[:8]:
         print(f"  | {ln}")
-    if len(context_lines) > 8:
-        print(f"  ... ({len(context_lines) - 8} more lines)")
     if diff_text:
         print(f"\n[watcher] Diff:\n{diff_text}")
 
