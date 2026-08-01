@@ -473,10 +473,10 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
             unarchived.append(f"  [{n.id}] unarchived: {n.content[:60]}")
         elif not o.archived and n.archived:
             archived.append(f"  [{n.id}] archived: {n.content[:60]}")
-        o_kids = {c.id: c for c in o.children}
-        n_kids = {c.id: c for c in n.children}
-        for cid in n_kids:
-            _compare(o_kids.get(cid), n_kids[cid], f"{path}/{cid}")
+        o_kids = {c.uuid: c for c in o.children}
+        n_kids = {c.uuid: c for c in n.children}
+        for uuid_key in n_kids:
+            _compare(o_kids.get(uuid_key), n_kids[uuid_key], f"{path}/{uuid_key}")
 
     _compare(old.root, new.root, "")
     has_change = bool(new_nodes or changed)
