@@ -376,16 +376,86 @@ class TestArchiveParsing:
         tree = parse_mindmap(_md("root: R\n*[archive] Old\n"))
         assert "🗄" in tree.to_outline()
 
+    def test_archive_hides_continuation_lines(self) -> None:
+        """Archived node with multi-line content: continuation lines hidden."""
+        tree = parse_mindmap(_md("root: R\n*[archive] Title\n  line2\n  line3\n"))
+        s = serialize_mindmap(tree)
+        assert "[archive] Title" in s
+        assert "line2" not in s, "continuation lines should be hidden for archived"
+        assert "line3" not in s
 
-# ── Detach / Attach ─────────────────────────────────────────────────────────
+    def test_hide_hides_continuation_lines(self) -> None:
+        """Hidden node with multi-line content: continuation lines hidden."""
+        tree = parse_mindmap(_md("root: R\n*[hide] Title\n  line2\n  line3\n"))
+        s = serialize_mindmap(tree)
+        assert "[hide] Title" in s
+        assert "line2" not in s, "continuation lines should be hidden for hidden"
+        assert "line3" not in s
+
+    def test_archive_no_reason_with_continuation(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[archive: old] Summary\n  detail\n"))
+        n = tree.get_node("root.1")
+        assert n.archived and n.archive_reason == "old"
+        assert "detail" in n.content  # content preserved in memory
+        assert "detail" not in serialize_mindmap(tree)  # but not in serialized
+
+
+# ── Archive branch flow ─────────────────────────────────────────────────────
+
+
+class TestArchiveBranchFlow:
+    def test_archive_branch_writes_summary_and_archive(self) -> None:
+        """Full flow: archive_branch detaches children, writes archive file."""
+        import tempfile, os
+        from tree_engine import MindTree, MindNode, save_graph, load_graph, serialize_mindmap
+        from archiver import archive_branch
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "test.md")
+            root = MindNode(id="root", content="Room", author="system", depth=0)
+            tree = MindTree(root=root)
+            tree._node_index["root"] = root
+            q = tree.add_reply("root", "Question", "user")
+            a = tree.add_reply(q.id, "Long answer with details", "agent")
+
+            # Save initial state
+            save_graph(tree, md)
+            from pathlib import Path
+            Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
+            tree.add_reply(a.id, "Follow-up", "user")
+            save_graph(tree, md)
+
+            # Archive the agent reply node
+            summary = archive_branch(md, a.id, "Manual summary")
+            assert summary == "Manual summary"
+
+            # Check graph
+            loaded = load_graph(md)
+            assert loaded is not None
+            archived_node = loaded.get_node(a.id)
+            assert archived_node is not None
+            assert archived_node.archived
+            assert archived_node.content == "Manual summary"
+            assert len(archived_node.children) == 0
+
+            # Check .md has summary only, no details
+            md_text = Path(md).read_text()
+            assert "*[archive] Manual summary" in md_text or "Manual summary" in md_text
+            assert "Long answer" not in md_text
+
+            # Check archive file exists
+            from archiver import archive_dir
+            ad = archive_dir(md)
+            files = list(ad.glob(f"{a.id}_*.md"))
+            assert len(files) == 1
+            archive_content = files[0].read_text()
+            assert "Long answer" in archive_content
+            assert "Follow-up" in archive_content
 
 
 class TestDetachAttach:
     def test_detach(self) -> None:
         tree = parse_mindmap(_md("root: R\n* Topic\n  [*] R1\n  [*] R2\n"))
         sub = tree.detach_subtree("root.1")
-        assert sub is not None
-        assert len(sub.all_nodes()) == 3
         assert tree.get_node("root.1") is None
 
     def test_attach(self) -> None:

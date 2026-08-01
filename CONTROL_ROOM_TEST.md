@@ -6,7 +6,6 @@
 
 ```agentsmindmap
 root: CONTROL ROOM
-* НОВОЕ В НАЧАЛЕ <!--uuid:a16d474b8c2e-->
-* Сообщение А <!--uuid:2e56804c88db-->
+* Вопрос
+  [*][archive] Длинный ответ с деталями
 ```
-

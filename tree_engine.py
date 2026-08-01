@@ -348,9 +348,11 @@ def serialize_mindmap(tree: MindTree) -> str:
             content_lines = node.content.split("\n")
             uuid_suffix = f" <!--uuid:{node.uuid}-->" if node.uuid else ""
             lines.append(f"{indent}{tag} {content_lines[0]}{uuid_suffix}")
-            cont_indent = "  " * depth
-            for cont in content_lines[1:]:
-                lines.append(f"{cont_indent}{cont}")
+            # Continuation lines — only for visible nodes
+            if not node.hidden and not node.archived:
+                cont_indent = "  " * depth
+                for cont in content_lines[1:]:
+                    lines.append(f"{cont_indent}{cont}")
         if node.hidden or node.archived:
             return
         for child in node.children:
