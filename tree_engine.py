@@ -476,8 +476,12 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
         o_kids = {c.uuid: c for c in o.children}
         n_kids = {c.uuid: c for c in n.children}
         for uuid_key in n_kids:
-            _compare(o_kids.get(uuid_key), n_kids[uuid_key], f"{path}/{uuid_key}")
-
+            o_match = o_kids.get(uuid_key)
+            if o_match is None:
+                # Fallback: positional ID match for backward compat
+                o_by_id = {c.id: c for c in o.children}
+                o_match = o_by_id.get(n_kids[uuid_key].id)
+            _compare(o_match, n_kids[uuid_key], f"{path}/{uuid_key}")
     _compare(old.root, new.root, "")
     has_change = bool(new_nodes or changed)
 

@@ -608,3 +608,137 @@ class TestBatchReply:
             assert q.children[0].content == "Idea 1"
             assert q.children[1].content == "Idea 2"
             assert q.children[2].content == "Idea 3"
+
+
+# ── Regression tests ────────────────────────────────────────────────────────
+
+
+class TestRegressionNewNodeDetected:
+    """BUG: new node in .md not detected by diff_trees."""
+
+    def test_new_node_at_end(self) -> None:
+        """Appending a node should be detected."""
+        old = parse_mindmap(_md("root: R\n* Q1\n"))
+        new = parse_mindmap(_md("root: R\n* Q1\n* Q2\n"))
+        # Simulate UUID match: copy UUID from old to new for existing nodes
+        new.get_node("root.1").uuid = old.get_node("root.1").uuid
+        has_change, diff = diff_trees(old, new)
+        assert has_change, f"New node not detected: {diff}"
+        assert "Q2" in diff
+
+    def test_new_node_inserted_middle(self) -> None:
+        """Inserting in the middle should be detected."""
+        old = parse_mindmap(_md("root: R\n* A\n* C\n"))
+        new = parse_mindmap(_md("root: R\n* A\n* B\n* C\n"))
+        # Match UUIDs for existing nodes
+        new.get_node("root.1").uuid = old.get_node("root.1").uuid
+        new.get_node("root.3").uuid = old.get_node("root.2").uuid
+        has_change, diff = diff_trees(old, new)
+        assert has_change, f"Inserted node not detected: {diff}"
+        assert "B" in diff
+
+    def test_new_node_different_order(self) -> None:
+        """Nodes in different order + new node — should detect new."""
+        old = parse_mindmap(_md("root: R\n* A\n* B\n"))
+        new = parse_mindmap(_md("root: R\n* B\n* A\n* NEW\n"))
+        new.get_node("root.1").uuid = old.get_node("root.2").uuid
+        new.get_node("root.2").uuid = old.get_node("root.1").uuid
+        has_change, diff = diff_trees(old, new)
+        assert has_change, f"New node in reordered tree not detected: {diff}"
+        assert "NEW" in diff
+
+
+class TestRegressionHideNoLLM:
+    """BUG: hide toggle triggered LLM call."""
+
+    def test_hide_is_not_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
+        new = parse_mindmap(_md("root: R\n*[hide] Q\n  [*] A\n"))
+        new.get_node("root.1").uuid = old.get_node("root.1").uuid
+        new.get_node("root.1.1").uuid = old.get_node("root.1.1").uuid
+        has_change, _ = diff_trees(old, new)
+        assert not has_change, "Hide toggle should NOT trigger LLM"
+
+    def test_unhide_is_not_content_change(self) -> None:
+        old = parse_mindmap(_md("root: R\n*[hide] Q\n  [*] A\n"))
+        new = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
+        new.get_node("root.1").uuid = old.get_node("root.1").uuid
+        new.get_node("root.1.1").uuid = old.get_node("root.1.1").uuid
+        has_change, _ = diff_trees(old, new)
+        assert not has_change, "Unhide should NOT trigger LLM"
+
+
+class TestRegressionInsertPreservesData:
+    """BUG: inserting at beginning corrupted tree."""
+
+    def test_insert_at_beginning(self) -> None:
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "test.md")
+            old = parse_mindmap(_md("root: R\n* A\n  [*] ReplyA\n* B\n  [*] ReplyB\n"))
+            save_graph(old, md)
+
+            new_md = parse_mindmap(_md("root: R\n* NEW\n* A\n  [*] ReplyA\n* B\n  [*] ReplyB\n"))
+            new_md.get_node("root.2").uuid = old.get_node("root.1").uuid
+            new_md.get_node("root.2.1").uuid = old.get_node("root.1.1").uuid
+            new_md.get_node("root.3").uuid = old.get_node("root.2").uuid
+            new_md.get_node("root.3.2").uuid = old.get_node("root.2.2").uuid
+            merged = merge_md_into_graph(old, new_md)
+            s = serialize_mindmap(merged)
+
+            assert "NEW" in s, "Inserted node lost!"
+            assert "ReplyA" in s
+            assert "ReplyB" in s
+
+class TestRegressionArchiveRestore:
+    """BUG: archive lost data, restore broke author."""
+
+    def test_archive_preserves_children_in_file(self) -> None:
+        import tempfile, os
+        from archiver import archive_branch, archive_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "test.md")
+            tree = MindTree(root=MindNode(id="root", content="R", author="system", depth=0))
+            tree._node_index["root"] = tree.root
+            q = tree.add_reply("root", "Question", "user")
+            a = tree.add_reply(q.id, "Long answer", "agent")
+            tree.add_reply(a.id, "Detail", "user")
+            save_graph(tree, md)
+            from pathlib import Path
+            Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
+
+            archive_branch(md, a.id, "Summary")
+
+            # Check archive file exists and has full content
+            files = list(archive_dir(md).glob(f"{a.id}_*.md"))
+            assert len(files) == 1
+            content = files[0].read_text()
+            assert "Long answer" in content
+            assert "Detail" in content
+
+            # Check .md has summary only
+            md_text = Path(md).read_text()
+            assert "Long answer" not in md_text
+            assert "Detail" not in md_text
+
+    def test_restore_preserves_author(self) -> None:
+        import tempfile, os
+        from archiver import archive_branch, restore_branch
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "test.md")
+            tree = MindTree(root=MindNode(id="root", content="R", author="system", depth=0))
+            tree._node_index["root"] = tree.root
+            q = tree.add_reply("root", "Q", "user")
+            a = tree.add_reply(q.id, "A", "agent")
+            save_graph(tree, md)
+            from pathlib import Path
+            Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
+
+            archive_branch(md, a.id, "Summary")
+            restore_branch(md, a.id)
+
+            loaded = load_graph(md)
+            node = loaded.get_node(a.id)
+            assert node is not None
+            assert node.author == "agent", f"Author lost: {node.author}"
+            assert not node.archived
