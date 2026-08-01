@@ -11,31 +11,29 @@ On each change:
 The .md file is a VIEW into the full tree stored in .graph.json.
 Hidden subtrees exist only in .graph.json.
 """
+
 import argparse
-import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
-from watchfiles import Change, watch
+from watchfiles import Change
+from watchfiles import watch
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-from agent import (
-    CONTROL_ROOM,
-    ControlRoomContext,
-    create_agent,
-    process_change,
-)
-from tree_engine import (
-    diff_trees,
-    load_graph,
-    merge_md_into_graph,
-    parse_mindmap,
-    replace_block,
-    save_graph,
-    serialize_mindmap,
-)
+from agent import CONTROL_ROOM
+from agent import ControlRoomContext
+from agent import create_agent
+from agent import process_change
+from tree_engine import diff_trees
+from tree_engine import load_graph
+from tree_engine import merge_md_into_graph
+from tree_engine import parse_mindmap
+from tree_engine import replace_block
+from tree_engine import save_graph
+from tree_engine import serialize_mindmap
 
 MIND_MAP_TEMPLATE = """\
 # CONTROL ROOM
@@ -51,6 +49,7 @@ root: CONTROL ROOM
 """
 
 THINKING_MARKER = "[*] ...thinking..."
+
 
 def _append_placeholder(ctx: ControlRoomContext) -> str:
     """Write [*] ...thinking... as temporary visual feedback."""
@@ -98,7 +97,8 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
         return md_text
 
     # Detect [archive] / unarchive BEFORE merge (children still intact)
-    from archiver import archive_branch, restore_branch
+    from archiver import archive_branch
+    from archiver import restore_branch
 
     # Find newly archived nodes: in md_tree but not archived in full
     for node in md_tree.all_nodes():
@@ -130,7 +130,7 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
     return new_content
 
 
-def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
+def run_once(agent: Any, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     """Process current state of CONTROL_ROOM.md once."""
     fpath = ctx.file_path
     if not fpath.exists():
@@ -191,7 +191,7 @@ def run_once(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     ctx.last_mtime = fpath.stat().st_mtime
 
 
-def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
+def run_watch(agent: Any, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     """Watch the mind map file continuously using inotify (via watchfiles)."""
     fpath = ctx.file_path.resolve()
     print(f"[watcher] Watching {fpath.name} (inotify, real-time)...")
@@ -223,16 +223,24 @@ def run_watch(agent, ctx: ControlRoomContext, *, dry_run: bool = False) -> None:
     except KeyboardInterrupt:
         print("\n[watcher] Stopped.")
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="CONTROL ROOM watcher — monitors mind map file for changes.",
     )
     parser.add_argument(
-        "file", nargs="?", default=str(CONTROL_ROOM),
+        "file",
+        nargs="?",
+        default=str(CONTROL_ROOM),
         help=f"Mind map file to watch (default: {CONTROL_ROOM})",
     )
     parser.add_argument("--once", "-1", action="store_true", help="Process once and exit.")
-    parser.add_argument("--dry-run", "-n", action="store_true", help="Show diff without calling the agent.")
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Show diff without calling the agent.",
+    )
     parser.add_argument("--model", "-m", default=None, help="Override LLM model.")
 
     args = parser.parse_args()

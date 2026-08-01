@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 *_graph.json
 archive/
+.worker_probe
+PROGRESS_BK.md

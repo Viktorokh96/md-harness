@@ -9,20 +9,17 @@ from pathlib import Path
 
 import pytest
 
-from tree_engine import (
-    HIDE_RE,
-    TAG_RE,
-    MindNode,
-    MindTree,
-    diff_trees,
-    graph_path,
-    load_graph,
-    merge_md_into_graph,
-    parse_mindmap,
-    save_graph,
-    serialize_mindmap,
-)
-
+from tree_engine import HIDE_RE
+from tree_engine import TAG_RE
+from tree_engine import MindNode
+from tree_engine import MindTree
+from tree_engine import diff_trees
+from tree_engine import graph_path
+from tree_engine import load_graph
+from tree_engine import merge_md_into_graph
+from tree_engine import parse_mindmap
+from tree_engine import save_graph
+from tree_engine import serialize_mindmap
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -82,12 +79,7 @@ class TestHideParsing:
         assert n.content == "Hidden reply"
 
     def test_hide_with_children(self) -> None:
-        tree = parse_mindmap(_md(
-            "root: R\n"
-            "*[hide] Hidden\n"
-            "  [*] child1\n"
-            "  [*] child2\n"
-        ))
+        tree = parse_mindmap(_md("root: R\n*[hide] Hidden\n  [*] child1\n  [*] child2\n"))
         n = tree.get_node("root.1")
         assert n is not None and n.hidden
         assert len(n.children) == 2
@@ -103,9 +95,7 @@ class TestHideParsing:
         assert not t2.get_node("root.2").hidden
 
     def test_serialize_excludes_hidden_children(self) -> None:
-        tree = parse_mindmap(_md(
-            "root: R\n*[hide] H\n  [*] A1\n  [*] A2\n"
-        ))
+        tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] A1\n  [*] A2\n"))
         s = serialize_mindmap(tree)
         assert "*[hide] H" in s
         assert "A1" not in s
@@ -117,16 +107,12 @@ class TestHideParsing:
         assert "📦" in outline
 
     def test_outline_shows_hidden_children(self) -> None:
-        tree = parse_mindmap(_md(
-            "root: R\n*[hide] H\n  [*] A1\n"
-        ))
+        tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] A1\n"))
         outline = tree.to_outline()
         assert "A1" in outline  # by default show_hidden=True
 
     def test_outline_hides_hidden_children(self) -> None:
-        tree = parse_mindmap(_md(
-            "root: R\n*[hide] H\n  [*] A1\n"
-        ))
+        tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] A1\n"))
         outline = tree.to_outline(show_hidden=False)
         assert "A1" not in outline
 
@@ -259,9 +245,8 @@ class TestGraphSync:
     def _import_watcher(self) -> None:
         import importlib.util
         import sys
-        spec = importlib.util.spec_from_file_location(
-            "watcher_sync", "watcher.py"
-        )
+
+        spec = importlib.util.spec_from_file_location("watcher_sync", "watcher.py")
         self.watcher = importlib.util.module_from_spec(spec)
         sys.modules["watcher_sync"] = self.watcher
         spec.loader.exec_module(self.watcher)
@@ -344,7 +329,6 @@ class TestGraphSync:
             assert h.children[0].content == "Secret"
 
 
-
 # ── Archive parsing ─────────────────────────────────────────────────────────
 
 
@@ -406,9 +390,16 @@ class TestArchiveParsing:
 class TestArchiveBranchFlow:
     def test_archive_branch_writes_summary_and_archive(self) -> None:
         """Full flow: archive_branch detaches children, writes archive file."""
-        import tempfile, os
-        from tree_engine import MindTree, MindNode, save_graph, load_graph, serialize_mindmap
+        import os
+        import tempfile
+
         from archiver import archive_branch
+        from tree_engine import MindNode
+        from tree_engine import MindTree
+        from tree_engine import load_graph
+        from tree_engine import save_graph
+        from tree_engine import serialize_mindmap
+
         with tempfile.TemporaryDirectory() as tmp:
             md = os.path.join(tmp, "test.md")
             root = MindNode(id="root", content="Room", author="system", depth=0)
@@ -420,6 +411,7 @@ class TestArchiveBranchFlow:
             # Save initial state
             save_graph(tree, md)
             from pathlib import Path
+
             Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
             tree.add_reply(a.id, "Follow-up", "user")
             save_graph(tree, md)
@@ -444,6 +436,7 @@ class TestArchiveBranchFlow:
 
             # Check archive file exists
             from archiver import archive_dir
+
             ad = archive_dir(md)
             files = list(ad.glob(f"{a.id}_*.md"))
             assert len(files) == 1
@@ -481,6 +474,7 @@ class TestDetachAttach:
 class TestRenderMermaid:
     def test_basic(self) -> None:
         from tree_engine import render_mermaid
+
         tree = parse_mindmap(_md("root: R\n* Q\n  [*] A\n"))
         result = render_mermaid(tree)
         assert "```mermaid" in result
@@ -490,6 +484,7 @@ class TestRenderMermaid:
 
     def test_hidden_nodes(self) -> None:
         from tree_engine import render_mermaid
+
         tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] Secret\n"))
         result = render_mermaid(tree)
         assert "📦" in result or "H" in result
@@ -497,6 +492,7 @@ class TestRenderMermaid:
 
     def test_archived_nodes(self) -> None:
         from tree_engine import render_mermaid
+
         tree = parse_mindmap(_md("root: R\n*[archive] Old\n  [*] Gone\n"))
         result = render_mermaid(tree)
         assert "🗄" in result
@@ -506,6 +502,7 @@ class TestRenderMermaid:
 class TestExtractBlock:
     def test_extracts(self) -> None:
         from tree_engine import extract_block
+
         text = "# H\n\n```agentsmindmap\nroot: R\n* Q\n```\nfooter\n"
         block = extract_block(text)
         assert block is not None
@@ -514,10 +511,12 @@ class TestExtractBlock:
 
     def test_no_block(self) -> None:
         from tree_engine import extract_block
+
         assert extract_block("# Just text\n") is None
 
     def test_unclosed(self) -> None:
         from tree_engine import extract_block
+
         assert extract_block("# H\n```agentsmindmap\nroot: R\n") is None
 
 
@@ -590,8 +589,11 @@ class TestHideCycleE2E:
 
 class TestBatchReply:
     def test_creates_multiple_branches(self) -> None:
-        import tempfile, os
-        from tree_engine import MindTree, MindNode
+        import tempfile
+
+        from tree_engine import MindNode
+        from tree_engine import MindTree
+
         with tempfile.TemporaryDirectory() as tmp:
             root = MindNode(id="root", content="R", author="system", depth=0)
             tree = MindTree(root=root)
@@ -672,7 +674,9 @@ class TestRegressionInsertPreservesData:
     """BUG: inserting at beginning corrupted tree."""
 
     def test_insert_at_beginning(self) -> None:
-        import tempfile, os
+        import os
+        import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             md = os.path.join(tmp, "test.md")
             old = parse_mindmap(_md("root: R\n* A\n  [*] ReplyA\n* B\n  [*] ReplyB\n"))
@@ -690,12 +694,17 @@ class TestRegressionInsertPreservesData:
             assert "ReplyA" in s
             assert "ReplyB" in s
 
+
 class TestRegressionArchiveRestore:
     """BUG: archive lost data, restore broke author."""
 
     def test_archive_preserves_children_in_file(self) -> None:
-        import tempfile, os
-        from archiver import archive_branch, archive_dir
+        import os
+        import tempfile
+
+        from archiver import archive_branch
+        from archiver import archive_dir
+
         with tempfile.TemporaryDirectory() as tmp:
             md = os.path.join(tmp, "test.md")
             tree = MindTree(root=MindNode(id="root", content="R", author="system", depth=0))
@@ -705,6 +714,7 @@ class TestRegressionArchiveRestore:
             tree.add_reply(a.id, "Detail", "user")
             save_graph(tree, md)
             from pathlib import Path
+
             Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
 
             archive_branch(md, a.id, "Summary")
@@ -722,8 +732,12 @@ class TestRegressionArchiveRestore:
             assert "Detail" not in md_text
 
     def test_restore_preserves_author(self) -> None:
-        import tempfile, os
-        from archiver import archive_branch, restore_branch
+        import os
+        import tempfile
+
+        from archiver import archive_branch
+        from archiver import restore_branch
+
         with tempfile.TemporaryDirectory() as tmp:
             md = os.path.join(tmp, "test.md")
             tree = MindTree(root=MindNode(id="root", content="R", author="system", depth=0))
@@ -732,6 +746,7 @@ class TestRegressionArchiveRestore:
             a = tree.add_reply(q.id, "A", "agent")
             save_graph(tree, md)
             from pathlib import Path
+
             Path(md).write_text("# T\n\n" + serialize_mindmap(tree))
 
             archive_branch(md, a.id, "Summary")

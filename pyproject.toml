@@ -2,7 +2,7 @@
 name = "control-room"
 version = "0.1.0"
 description = "CONTROL ROOM — LLM-powered mind map dialogue with OpenAI Agents SDK"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "openai-agents>=0.19",
     "openai>=1.0",
@@ -13,9 +13,114 @@ dependencies = [
 [project.scripts]
 control-room = "watcher:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pre-commit>=4",
+    "ruff>=0.12",
+    "mypy>=1.18",
+]
+
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "TID",  # flake8-tidy-imports
+    "RUF",  # ruff-specific rules
+    "ANN",  # flake8-annotations
+    "FBT",  # flake8-boolean-trap
+    "A",    # flake8-builtins
+    "COM",  # flake8-commas
+    "DTZ",  # flake8-datetimez
+    "EM",   # flake8-errmsg
+    "FA",   # flake8-future-annotations
+    "FURB", # refurb
+    "G",    # flake8-logging-format
+    "INP",  # flake8-no-pep420
+    "PIE",  # flake8-pie
+    "PL",   # pylint
+    "PT",   # flake8-pytest-style
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "RSE",  # flake8-raise
+    "SLF",  # flake8-self
+    "YTT",  # flake8-2020
+]
+ignore = [
+    "ANN101",  # self type annotation (removed in newer ruff)
+    "ANN102",  # cls type annotation (removed in newer ruff)
+    "ANN401",  # Any type annotation — too noisy for SDK callbacks
+    "D",       # pydocstyle — handled separately when needed
+    "PLR0913", # too-many-arguments — SDK signatures are what they are
+    "PLR2004", # magic-value-comparison — too noisy
+    "PT011",   # pytest.raises without match — not always needed
+    "PT018",   # assertion on empty tuple
+    "SLF001",  # private-member-access — needed for testing
+    "COM812",  # conflicts with ruff formatter
+]
+extend-safe-fixes = [
+    "TCH",  # auto-fix typing imports -> TYPE_CHECKING
+]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+show_error_codes = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["agents", "agents.*", "openai.*", "watchfiles.*", "dotenv.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+[tool.ruff.lint.per-file-ignores]
+"watcher.py" = [
+    "E402",
+    "PLC0415",
+    "SIM102",
+]
+"tests/test_graph.py" = [
+    "SLF001",
+    "PTH",
+    "E401",
+    "E101",
+    "I001",
+    "F841",
+    "F401",
+    "COM812",
+    "UP043",
+    "C408",
+    "PLC0206",
+    "PLC0415",
+    "PTH118",
+    "PTH110",
+    "PTH123",
+    "RUF043",
+    "RUF059",
+]

@@ -25,8 +25,10 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
+
 # ── Block markers ───────────────────────────────────────────────────────────
 
 BLOCK_START = "```agentsmindmap"
@@ -111,10 +113,14 @@ class MindTree:
     def add_reply(self, parent_id: str, content: str, author: str) -> MindNode:
         parent = self._node_index.get(parent_id)
         if parent is None:
-            raise KeyError(f"Node not found: {parent_id}")
+            msg = f"Node not found: {parent_id}"
+            raise KeyError(msg)
         child_id = f"{parent_id}.{len(parent.children) + 1}"
         child = MindNode(
-            id=child_id, content=content, author=author, depth=parent.depth + 1,
+            id=child_id,
+            content=content,
+            author=author,
+            depth=parent.depth + 1,
         )
         parent.add_child(child)
         self._node_index[child_id] = child
@@ -133,13 +139,16 @@ class MindTree:
             self._node_index.pop(n.id, None)
             for c in n.children:
                 _remove(c)
+
         _remove(node)
 
         subtree = MindTree(root=node)
+
         def _reindex(n: MindNode) -> None:
             subtree._node_index[n.id] = n
             for c in n.children:
                 _reindex(c)
+
         _reindex(node)
         return subtree
 
@@ -147,7 +156,8 @@ class MindTree:
         """Attach subtree under parent_id. Returns the attached root."""
         parent = self._node_index.get(parent_id)
         if parent is None:
-            raise KeyError(f"Parent not found: {parent_id}")
+            msg = f"Parent not found: {parent_id}"
+            raise KeyError(msg)
         node = subtree.root
         node.parent = parent
         parent.add_child(node)
@@ -172,7 +182,11 @@ class MindTree:
             if node is self.root:
                 lines.append(f"📌 [{node.id}] {node.content}")
             else:
-                marker = "🗄" if node.archived else ("📦" if node.hidden else ("*" if node.is_user else "[*]"))
+                marker = (
+                    "🗄"
+                    if node.archived
+                    else ("📦" if node.hidden else ("*" if node.is_user else "[*]"))
+                )
                 lines.append(f"{prefix}{marker} [{node.id}] {node.content}")
             if (node.hidden or node.archived) and not show_hidden:
                 return
@@ -181,40 +195,53 @@ class MindTree:
 
         _walk(self.root, 0)
         return "\n".join(lines)
+
     def to_dict(self) -> dict[str, Any]:
         def _node_to_dict(node: MindNode) -> dict[str, Any]:
             d: dict[str, Any] = {
-                "id": node.id, "uuid": node.uuid, "content": node.content,
-                "author": node.author, "depth": node.depth, "hidden": node.hidden,
+                "id": node.id,
+                "uuid": node.uuid,
+                "content": node.content,
+                "author": node.author,
+                "depth": node.depth,
+                "hidden": node.hidden,
                 "children": [_node_to_dict(c) for c in node.children],
             }
             if node.archived:
                 d["archived"] = True
                 d["archive_reason"] = node.archive_reason
             return d
+
         return _node_to_dict(self.root)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MindTree:
         def _dict_to_node(d: dict[str, Any]) -> MindNode:
             node = MindNode(
-                id=d["id"], uuid=d.get("uuid", uuid.uuid4().hex[:12]),
-                content=d["content"], author=d["author"],
-                depth=d["depth"], hidden=d.get("hidden", False),
+                id=d["id"],
+                uuid=d.get("uuid", uuid.uuid4().hex[:12]),
+                content=d["content"],
+                author=d["author"],
+                depth=d["depth"],
+                hidden=d.get("hidden", False),
                 archived=d.get("archived", False),
                 archive_reason=d.get("archive_reason", ""),
             )
             for cd in d.get("children", []):
                 node.add_child(_dict_to_node(cd))
             return node
+
         root = _dict_to_node(data)
         tree = cls(root=root)
+
         def _index(n: MindNode) -> None:
             tree._node_index[n.id] = n
             for c in n.children:
                 _index(c)
+
         _index(root)
         return tree
+
 
 # ── Parser ──────────────────────────────────────────────────────────────────
 
@@ -222,21 +249,25 @@ class MindTree:
 def parse_mindmap(text: str) -> MindTree:
     start = text.find(BLOCK_START)
     if start == -1:
-        raise ValueError(f"No {BLOCK_START} block found")
+        msg = f"No {BLOCK_START} block found"
+        raise ValueError(msg)
     start = text.find("\n", start) + 1
     end = text.find(BLOCK_END, start)
     if end == -1:
-        raise ValueError(f"Unclosed {BLOCK_START} block")
+        msg = f"Unclosed {BLOCK_START} block"
+        raise ValueError(msg)
     return _parse_block(text[start:end].strip())
 
 
-def _parse_block(block: str) -> MindTree:
+def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
     lines = block.splitlines()
     if not lines:
-        raise ValueError("Empty mindmap block")
+        msg = "Empty mindmap block"
+        raise ValueError(msg)
     root_line = lines[0].strip()
     if not root_line.startswith("root:"):
-        raise ValueError(f"First line must be 'root: <name>', got: {root_line}")
+        msg = f"First line must be 'root: <name>', got: {root_line}"
+        raise ValueError(msg)
     root_name = root_line[5:].strip()
     root = MindNode(id="root", content=root_name, author="system", depth=0)
     tree = MindTree(root=root)
@@ -252,7 +283,8 @@ def _parse_block(block: str) -> MindTree:
         indent = len(line) - len(stripped)
         depth = indent // 2 + 1
         if indent % 2 != 0:
-            raise ValueError(f"Indent must be multiple of 2: {line!r}")
+            msg = f"Indent must be multiple of 2: {line!r}"
+            raise ValueError(msg)
 
         hidden = False
         archived = False
@@ -266,7 +298,7 @@ def _parse_block(block: str) -> MindTree:
         if hide_m:
             tag = hide_m.group(1)
             author = "agent" if tag == "[*]" else "user"
-            content = stripped[hide_m.end():].strip()
+            content = stripped[hide_m.end() :].strip()
             hidden = True
         elif arc_reason_m:
             tag = arc_reason_m.group(1)
@@ -284,11 +316,12 @@ def _parse_block(block: str) -> MindTree:
         elif tag_m:
             tag = tag_m.group(1)
             author = "agent" if tag == "[*]" else "user"
-            content = stripped[tag_m.end():].strip()
+            content = stripped[tag_m.end() :].strip()
         else:
             parent_node = stack.get(depth - 1)
             if parent_node is None:
-                raise ValueError(f"No parent for continuation: {line!r}")
+                msg = f"No parent for continuation: {line!r}"
+                raise ValueError(msg)
             parent_node.content += "\n" + stripped
             continue
 
@@ -301,15 +334,21 @@ def _parse_block(block: str) -> MindTree:
 
         parent = stack.get(depth - 1)
         if parent is None:
-            raise ValueError(f"No parent at depth {depth - 1}: {line!r}")
+            msg = f"No parent at depth {depth - 1}: {line!r}"
+            raise ValueError(msg)
         counter.setdefault(depth, 0)
         counter[depth] += 1
         node_id = f"{parent.id}.{counter[depth]}"
 
-        kwargs: dict[str, Any] = dict(
-            id=node_id, content=content, author=author, depth=depth,
-            hidden=hidden, archived=archived, archive_reason=archive_reason,
-        )
+        kwargs: dict[str, Any] = {
+            "id": node_id,
+            "content": content,
+            "author": author,
+            "depth": depth,
+            "hidden": hidden,
+            "archived": archived,
+            "archive_reason": archive_reason,
+        }
         if node_uuid:
             kwargs["uuid"] = node_uuid
         node = MindNode(**kwargs)
@@ -352,6 +391,7 @@ def serialize_mindmap(tree: MindTree) -> str:
             return
         for child in node.children:
             _walk(child, depth + 1, lines)
+
     lines: list[str] = []
     _walk(tree.root, 0, lines)
     body = "\n".join(lines)
@@ -401,17 +441,22 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
                             matched_gc = g.children[gi]
                             g_children_unmatched.discard(gi)
                             break
-                    if matched_gc is not None:
-                        merged = _merge(matched_gc, mc)
-                    else:
-                        merged = _copy_node(mc)
+                    merged = _merge(matched_gc, mc) if matched_gc is not None else _copy_node(mc)
                 new_children.append(merged)
                 merged.parent = g
-            if (was_hidden and not g.hidden) or g.hidden or (was_archived and not g.archived) or g.archived:
-                if not new_children and g.children:
-                    new_children = [_copy_node(c) for c in g.children]
-                    for c in new_children:
-                        c.parent = g
+            if (
+                (
+                    (was_hidden and not g.hidden)
+                    or g.hidden
+                    or (was_archived and not g.archived)
+                    or g.archived
+                )
+                and not new_children
+                and g.children
+            ):
+                new_children = [_copy_node(c) for c in g.children]
+                for c in new_children:
+                    c.parent = g
             g.children = new_children
         return g
 
@@ -423,9 +468,14 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
 
 def _copy_node(node: MindNode) -> MindNode:
     new = MindNode(
-        id=node.id, uuid=node.uuid, content=node.content,
-        author=node.author, depth=node.depth,
-        hidden=node.hidden, archived=node.archived, archive_reason=node.archive_reason,
+        id=node.id,
+        uuid=node.uuid,
+        content=node.content,
+        author=node.author,
+        depth=node.depth,
+        hidden=node.hidden,
+        archived=node.archived,
+        archive_reason=node.archive_reason,
     )
     for c in node.children:
         new.add_child(_copy_node(c))
@@ -475,13 +525,14 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
             archived.append(f"  [{n.id}] archived: {n.content[:60]}")
         o_kids = {c.uuid: c for c in o.children}
         n_kids = {c.uuid: c for c in n.children}
-        for uuid_key in n_kids:
+        for uuid_key, n_node in n_kids.items():
             o_match = o_kids.get(uuid_key)
             if o_match is None:
                 # Fallback: positional ID match for backward compat
                 o_by_id = {c.id: c for c in o.children}
-                o_match = o_by_id.get(n_kids[uuid_key].id)
-            _compare(o_match, n_kids[uuid_key], f"{path}/{uuid_key}")
+                o_match = o_by_id.get(n_node.id)
+            _compare(o_match, n_node, f"{path}/{uuid_key}")
+
     _compare(old.root, new.root, "")
     has_change = bool(new_nodes or changed)
 
@@ -506,6 +557,7 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
 
 def render_mermaid(tree: MindTree) -> str:
     lines = ["```mermaid", "mindmap"]
+
     def _walk(node: MindNode, indent: str) -> None:
         if node is tree.root:
             lines.append(f"  {indent}{_sanitize(node.content)}")
@@ -521,6 +573,7 @@ def render_mermaid(tree: MindTree) -> str:
             return
         for child in node.children:
             _walk(child, indent + "  ")
+
     _walk(tree.root, "")
     lines.append("```")
     return "\n".join(lines)
@@ -567,13 +620,13 @@ def graph_path(md_path: str) -> str:
 def load_graph(md_path: str) -> MindTree | None:
     gp = graph_path(md_path)
     try:
-        with open(gp) as f:
+        with open(gp) as f:  # noqa: PTH123
             return MindTree.from_dict(json.load(f))
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return None
 
 
 def save_graph(tree: MindTree, md_path: str) -> None:
-    with open(graph_path(md_path), "w") as f:
+    with open(graph_path(md_path), "w") as f:  # noqa: PTH123
         json.dump(tree.to_dict(), f, indent=2, ensure_ascii=False)
         f.write("\n")

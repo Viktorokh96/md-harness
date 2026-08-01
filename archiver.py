@@ -7,20 +7,19 @@ NOT part of the ControlRoom agent — this is preprocessor logic.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 from openai import OpenAI
 
-from tree_engine import (
-    MindNode,
-    MindTree,
-    load_graph,
-    parse_mindmap,
-    save_graph,
-    serialize_mindmap,
-    replace_block,
-)
+from tree_engine import MindNode
+from tree_engine import MindTree
+from tree_engine import load_graph
+from tree_engine import parse_mindmap
+from tree_engine import replace_block
+from tree_engine import save_graph
+from tree_engine import serialize_mindmap
 
 # ── Archive dir ─────────────────────────────────────────────────────────────
 
@@ -32,13 +31,17 @@ def archive_dir(md_path: str) -> Path:
 # ── Summarize ───────────────────────────────────────────────────────────────
 
 
-SUMMARIZE_PROMPT = """Summarize this conversation subtree in ONE short sentence (max 15 words, in the same language).
-Focus on: what was asked, what was decided/answered. No bullet points, no markdown.
-
-Subtree:
-{subtree}
-
-Summary:"""
+SUMMARIZE_PROMPT = (
+    "Summarize this conversation subtree in ONE short sentence "
+    "(max 15 words, in the same language).\n"
+    "Focus on: what was asked, what was decided/answered. "
+    "No bullet points, no markdown.\n"
+    "\n"
+    "Subtree:\n"
+    "{subtree}\n"
+    "\n"
+    "Summary:"
+)
 
 
 def summarize(tree: MindTree, node_id: str) -> str:
@@ -76,6 +79,7 @@ def summarize(tree: MindTree, node_id: str) -> str:
     except Exception:
         return node.content[:80]
 
+
 # ── Archive ─────────────────────────────────────────────────────────────────
 
 
@@ -102,26 +106,29 @@ def archive_branch(md_path: str, node_id: str, manual_summary: str = "") -> str:
 
     subtree = tree.detach_subtree(node_id)
     if subtree is None:
-        return f"Error: cannot detach root node"
+        return "Error: cannot detach root node"
 
     # Write archive file with metadata
     ad = archive_dir(md_path)
     ad.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     archive_file = ad / f"{node_id}_{ts}.md"
     archive_file.write_text(
         f"# Archived branch: {node_id}\n\n"
-        f"archived_at: {datetime.now(timezone.utc).isoformat()}\n"
+        f"archived_at: {datetime.now(UTC).isoformat()}\n"
         f"summary: {summary}\n"
-        f"author: {author}\n\n"
-        + serialize_mindmap(subtree)
+        f"author: {author}\n\n" + serialize_mindmap(subtree),
     )
 
     # Insert archived marker node under saved parent
     if parent is not None:
         marker = MindNode(
-            id=node_id, content=summary, author=author, depth=depth_val,
-            archived=True, archive_reason=manual_summary if manual_summary else "",
+            id=node_id,
+            content=summary,
+            author=author,
+            depth=depth_val,
+            archived=True,
+            archive_reason=manual_summary or "",
         )
         marker.parent = parent
         parent.add_child(marker)

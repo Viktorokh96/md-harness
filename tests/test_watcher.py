@@ -6,17 +6,13 @@ import textwrap
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 # Import after setting up sys.path if needed
-from agent import ControlRoomContext, compute_diff
-from watcher import (
-    MIND_MAP_TEMPLATE,
-    THINKING_MARKER,
-    _append_placeholder,
-    _remove_thinking_markers,
-)
-
+from agent import ControlRoomContext
+from agent import compute_diff
+from watcher import MIND_MAP_TEMPLATE
+from watcher import THINKING_MARKER
+from watcher import _append_placeholder
+from watcher import _remove_thinking_markers
 
 # ── compute_diff tests ──────────────────────────────────────────────────────
 
@@ -93,13 +89,13 @@ class TestComputeDiff:
         # CONTROL ROOM
 
         * Hello
-        	[*] Hi there!
+          [*] Hi there!
         """)
         new = textwrap.dedent("""\
         # CONTROL ROOM
 
         * Hello
-        	[*] Hi there!
+          [*] Hi there!
         * New question
         """)
         result = compute_diff(old, new)
@@ -137,11 +133,7 @@ class TestPlaceholder:
     def test_remove_thinking_markers(self) -> None:
         with TemporaryDirectory() as tmp:
             fpath = Path(tmp) / "test.md"
-            fpath.write_text(
-                "# Header\n\n"
-                "```agentsmindmap\nroot: R\n```\n"
-                f"{THINKING_MARKER}\n"
-            )
+            fpath.write_text(f"# Header\n\n```agentsmindmap\nroot: R\n```\n{THINKING_MARKER}\n")
 
             ctx = ControlRoomContext(file_path=fpath)
             result = _remove_thinking_markers(ctx)

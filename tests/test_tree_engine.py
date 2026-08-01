@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from tree_engine import (
-    MindNode,
-    MindTree,
-    parse_mindmap,
-    replace_block,
-    serialize_mindmap,
-)
-
+from tree_engine import MindNode
+from tree_engine import MindTree
+from tree_engine import parse_mindmap
+from tree_engine import replace_block
+from tree_engine import serialize_mindmap
 
 # ── MindNode ────────────────────────────────────────────────────────────────
 
@@ -99,14 +96,9 @@ class TestParseMindmap:
         assert len(tree.root.children) == 2
 
     def test_nested_thread(self) -> None:
-        tree = parse_mindmap(_md(
-            "root: R\n"
-            "* Q\n"
-            "  [*] A1\n"
-            "    * Follow\n"
-            "      [*] A2\n"
-            "  [*] Parallel\n"
-        ))
+        tree = parse_mindmap(
+            _md("root: R\n* Q\n  [*] A1\n    * Follow\n      [*] A2\n  [*] Parallel\n"),
+        )
         q = tree.root.children[0]
         assert len(q.children) == 2
         assert q.children[0].children[0].content == "Follow"
@@ -116,7 +108,7 @@ class TestParseMindmap:
         assert len(tree.root.children) == 1
 
     def test_no_block_raises(self) -> None:
-        with pytest.raises(ValueError, match="No .* block"):
+        with pytest.raises(ValueError, match=r"No .* block"):
             parse_mindmap("# No block\n")
 
     def test_unclosed_block_raises(self) -> None:
@@ -152,15 +144,7 @@ class TestSerializeMindmap:
         assert t2.to_outline() == t1.to_outline()
 
     def test_round_trip_nested(self) -> None:
-        original = _md(
-            "root: R\n"
-            "* Q1\n"
-            "  [*] A1\n"
-            "    * F\n"
-            "      [*] A2\n"
-            "* Q2\n"
-            "  [*] A3\n"
-        )
+        original = _md("root: R\n* Q1\n  [*] A1\n    * F\n      [*] A2\n* Q2\n  [*] A3\n")
         t1 = parse_mindmap(original)
         t2 = parse_mindmap("# X\n\n" + serialize_mindmap(t1))
         assert t2.to_outline() == t1.to_outline()

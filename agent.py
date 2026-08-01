@@ -10,20 +10,24 @@ from __future__ import annotations
 
 import os
 import subprocess
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
-from typing import Optional
-from agents import Agent, RunContextWrapper, Runner, function_tool, set_tracing_disabled
+from typing import Any
 
-from tree_engine import (
-    MindTree,
-    load_graph,
-    parse_mindmap,
-    replace_block,
-    save_graph,
-    serialize_mindmap,
-)
+from agents import Agent
+from agents import RunContextWrapper
+from agents import Runner
+from agents import function_tool
+from agents import set_tracing_disabled
+
+from tree_engine import MindTree
+from tree_engine import load_graph
+from tree_engine import parse_mindmap
+from tree_engine import replace_block
+from tree_engine import save_graph
+from tree_engine import serialize_mindmap
+
 # ── Setup ───────────────────────────────────────────────────────────────────
 
 if os.environ.get("DISABLE_TRACING", "1") != "0":
@@ -31,7 +35,6 @@ if os.environ.get("DISABLE_TRACING", "1") != "0":
 
 
 CONTROL_ROOM = Path(__file__).resolve().parent / "CONTROL_ROOM.md"
-
 
 
 @dataclass
@@ -66,84 +69,45 @@ def _write_tree(ctx: ControlRoomContext, tree: MindTree) -> None:
     ctx.file_path.write_text(new_content)
 
 
-# ── Tools ───────────────────────────────────────────────────────────────────
+# ── Tool implementations (testable without SDK) ──────────────────────────────
 
 
-@function_tool
-def read_mindmap(wrapper: RunContextWrapper[ControlRoomContext]) -> str:
-    """Read the full mind map tree with node IDs.
-
-    Returns an indented outline where each line shows:
-      📌 [root] Room Name
-        * [node_id] user message
-          [*] [node_id] agent reply
-
-    Use this at the start of every turn to see the current tree state
-    and find the node IDs you need for `add_reply`.
-    """
-    tree = _read_tree(wrapper.context)
+def _impl_read_mindmap(ctx: ControlRoomContext) -> str:
+    """Read the full mind map tree with node IDs."""
+    tree = _read_tree(ctx)
     return tree.to_outline()
 
 
-@function_tool
-def add_reply(
-    wrapper: RunContextWrapper[ControlRoomContext],
-    parent_id: str,
-    content: str,
-) -> str:
-    """Add a reply node under `parent_id` in the tree. Saves to file.
-
-    Args:
-        parent_id: The node ID to reply to (e.g. "root.1" or "root.1.1.1").
-                   Get IDs from `read_mindmap()`.
-        content: The reply text. The author tag (* or [*]) is added
-                 automatically based on the agent calling this.
-    """
-    tree = _read_tree(wrapper.context)
+def _impl_add_reply(ctx: ControlRoomContext, parent_id: str, content: str) -> str:
+    """Add a reply node under parent_id in the tree."""
+    tree = _read_tree(ctx)
     tree.add_reply(parent_id, content, author="agent")
-    _write_tree(wrapper.context, tree)
+    _write_tree(ctx, tree)
     return f"Added agent reply under {parent_id}: {content}"
 
 
-@function_tool
-def batch_reply(
-    wrapper: RunContextWrapper[ControlRoomContext],
+def _impl_batch_reply(
+    ctx: ControlRoomContext,
     parent_id: str,
     replies: list[str],
 ) -> str:
-    """Create MULTIPLE reply branches under `parent_id` at once.
-
-    Use this when the user asks for N separate ideas/responses — pass them
-    as a list and they all become separate `[*]` branches. Much more reliable
-    than calling `add_reply` multiple times.
-
-    Args:
-        parent_id: The node ID to reply to.
-        replies: List of reply texts. Each string becomes one `[*]` branch.
-    """
-    tree = _read_tree(wrapper.context)
-    ids = []
+    """Create MULTIPLE reply branches under parent_id at once."""
+    tree = _read_tree(ctx)
+    ids: list[str] = []
     for text in replies:
         child = tree.add_reply(parent_id, text, author="agent")
         ids.append(child.id)
-    _write_tree(wrapper.context, tree)
+    _write_tree(ctx, tree)
     return f"Added {len(replies)} replies under {parent_id}: {', '.join(ids)}"
 
 
-@function_tool
-def find_nodes(
-    wrapper: RunContextWrapper[ControlRoomContext],
-    query: str,
-) -> str:
-    """Search the mind map tree for nodes containing `query` (case-insensitive).
-    Args:
-        query: Substring to search for in node content.
-    """
-    tree = _read_tree(wrapper.context)
+def _impl_find_nodes(ctx: ControlRoomContext, query: str) -> str:
+    """Search the mind map tree for nodes containing query."""
+    tree = _read_tree(ctx)
     results = tree.find_nodes(query)
     if not results:
         return f"No nodes found matching: {query}"
-    lines = []
+    lines: list[str] = []
     for node in results:
         path = " → ".join(node.path())
         tag = "*" if node.is_user else "[*]"
@@ -151,27 +115,31 @@ def find_nodes(
     return "\n".join(lines)
 
 
-@function_tool
-def stay_silent() -> str:
-    """Choose to say nothing. Call this when no response is needed."""
+def _impl_stay_silent() -> str:
+    """Choose to say nothing."""
     return "SILENT — no response needed."
 
 
-@function_tool
-def run_shell(
-    wrapper: RunContextWrapper[ControlRoomContext],
+def _impl_run_shell(
     command: str,
     *,
     timeout: int = 120,
+    cwd: Path | None = None,
 ) -> str:
     """Execute a shell command. Returns stdout/stderr/exit code."""
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=timeout, cwd=wrapper.context.file_path.parent,
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            check=False,
         )
         out = result.stdout.strip()
-        parts = []
+        err = result.stderr.strip()
+        parts: list[str] = []
         if out:
             parts.append(out)
         if err:
@@ -183,17 +151,15 @@ def run_shell(
         return f"Command timed out after {timeout}s"
 
 
-@function_tool
-def read_file(
-    wrapper: RunContextWrapper[ControlRoomContext],
+def _impl_read_file(
     filepath: str,
     *,
+    root_dir: Path,
     max_lines: int = 200,
 ) -> str:
-    """Read a project file. Path is relative to project root."""
-    root = wrapper.context.file_path.parent
-    target = (root / filepath).resolve()
-    root_resolved = root.resolve()
+    """Read a project file. Path is relative to root_dir. Blocks traversal."""
+    root_resolved = root_dir.resolve()
+    target = (root_dir / filepath).resolve()
     try:
         target.relative_to(root_resolved)
     except ValueError:
@@ -209,6 +175,80 @@ def read_file(
         return content
     except Exception as exc:
         return f"ERROR reading {filepath}: {exc}"
+
+
+# ── @function_tool wrappers ──────────────────────────────────────────────────
+
+
+@function_tool
+def read_mindmap(wrapper: RunContextWrapper[ControlRoomContext]) -> str:
+    """Read the full mind map tree with node IDs."""
+    return _impl_read_mindmap(wrapper.context)
+
+
+@function_tool
+def add_reply(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    parent_id: str,
+    content: str,
+) -> str:
+    """Add a reply node under `parent_id` in the tree. Saves to file."""
+    return _impl_add_reply(wrapper.context, parent_id, content)
+
+
+@function_tool
+def batch_reply(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    parent_id: str,
+    replies: list[str],
+) -> str:
+    """Create MULTIPLE reply branches under `parent_id` at once."""
+    return _impl_batch_reply(wrapper.context, parent_id, replies)
+
+
+@function_tool
+def find_nodes(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    query: str,
+) -> str:
+    """Search the mind map tree for nodes containing `query`."""
+    return _impl_find_nodes(wrapper.context, query)
+
+
+@function_tool
+def stay_silent() -> str:
+    """Choose to say nothing. Call this when no response is needed."""
+    return _impl_stay_silent()
+
+
+@function_tool
+def run_shell(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    command: str,
+    *,
+    timeout: int = 120,
+) -> str:
+    """Execute a shell command. Returns stdout/stderr/exit code."""
+    return _impl_run_shell(
+        command,
+        timeout=timeout,
+        cwd=wrapper.context.file_path.parent,
+    )
+
+
+@function_tool
+def read_file(
+    wrapper: RunContextWrapper[ControlRoomContext],
+    filepath: str,
+    *,
+    max_lines: int = 200,
+) -> str:
+    """Read a project file. Path is relative to project root."""
+    return _impl_read_file(
+        filepath,
+        root_dir=wrapper.context.file_path.parent,
+        max_lines=max_lines,
+    )
 
 
 # ── Worker sub-agent ────────────────────────────────────────────────────────
@@ -239,7 +279,7 @@ def _create_worker(model: str) -> Agent[ControlRoomContext]:
     )
 
 
-def _make_worker_tool(model: str):
+def _make_worker_tool(model: str) -> Any:
     worker = _create_worker(model)
     return worker.as_tool(
         tool_name="delegate_task",
@@ -247,7 +287,6 @@ def _make_worker_tool(model: str):
             "Delegate a task to a Worker sub-agent. "
             "Use for multi-step work: researching code, running commands, "
             "checking facts, exploring the project. "
-            "The worker has shell and file-read access. "
             "Give it a clear, self-contained task description."
         ),
     )
@@ -293,6 +332,7 @@ The mind map is a TREE with node IDs. Every turn:
 - Use `delegate_task` for multi-step work.
 - NEVER claim "создано N веток" unless you actually called add_reply/batch_reply.
 """
+
 
 def create_agent(model: str | None = None) -> Agent[ControlRoomContext]:
     """Create the CONTROL ROOM agent instance."""
@@ -375,9 +415,11 @@ Or call `stay_silent()` if no response is needed."""
 
     try:
         result = Runner.run_sync(agent, prompt, context=ctx, max_turns=100)
-        return result.final_output
+        return str(result.final_output)
     except Exception as exc:
         return f"Agent error: {exc}"
+
+
 if __name__ == "__main__":
     ctx = ControlRoomContext()
     if CONTROL_ROOM.exists():
