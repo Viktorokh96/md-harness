@@ -4,6 +4,7 @@ __pycache__/
 *_graph.json
 archive/
 .worker_probe
-PROGRESS_BK.md
-PROGRESS.md
-PRESENTATION.md
+*.md
+!AGENTS.md
+!README.md
+!docs/*.md
