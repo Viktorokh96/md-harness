@@ -77,7 +77,7 @@ def _remove_thinking_markers(ctx: ControlRoomContext) -> str:
 # ── Graph sync ──────────────────────────────────────────────────────────────
 
 
-def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
+def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912, PLR0915
     """Sync .md changes into .graph.json. Returns the new .md content.
 
     Side effects:
@@ -93,7 +93,8 @@ def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
         return md_text  # No valid block yet — don't touch
 
     full = load_graph(md_path)
-    if full is None:
+    is_fresh = full is None
+    if is_fresh:
         full = md_tree
 
     # Detect [archive] / unarchive BEFORE merge (children still intact)
@@ -102,6 +103,7 @@ def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
 
     # Find newly archived nodes: in md_tree but not archived in full
     for node in md_tree.all_nodes():
+        assert full is not None
         full_node = full.get_node(node.id)
         if node.archived and (full_node is None or not full_node.archived):
             # Newly archived — detach subtree from full while children exist
@@ -124,7 +126,6 @@ def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
     focus_removed = old_focus is not None and new_focus is None
 
     if focus_removed:
-        # Focus just removed — restore full tree from .graph.json, ignore .md
         assert old_focus is not None
         old_focus.focused = False
         save_graph(full, md_path)
@@ -135,14 +136,21 @@ def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
 
     merged = merge_md_into_graph(full, md_tree)
 
-    # Cleanup: remove ❓ from answered questions (agent has replied)
-    # Only clear questions that were ALREADY pending in previous cycle,
-    # not questions the user just added (even if old replies exist).
-    for node in merged.all_nodes():
-        if node.has_question and node.is_user:
-            has_agent_reply = any(child.is_agent for child in node.children)
-            if has_agent_reply and node.id in old_questions:
-                node.has_question = False
+    # Cleanup: remove ❓ from answered questions (agent has replied).
+    # - Fresh start: skip cleanup entirely (user may have imported old conv).
+    # - Subsequent cycle: only clean if question was pending in OLD graph
+    #   AND is still marked as question in .md (agent just answered).
+    #   If user just added ? (not in old_questions) → keep (new question).
+    if not is_fresh:
+        for node in merged.all_nodes():
+            if node.has_question and node.is_user:
+                has_agent_reply = any(child.is_agent for child in node.children)
+                if has_agent_reply:
+                    md_node = md_tree.get_node(node.id)
+                    was_pending = node.id in old_questions
+                    still_in_md = md_node is not None and md_node.has_question
+                    if was_pending and still_in_md:
+                        node.has_question = False
 
     save_graph(merged, md_path)
     for node in merged.all_nodes():

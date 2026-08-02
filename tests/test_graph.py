@@ -860,8 +860,45 @@ class TestQuestionCleanupE2E:
             assert "👤❓" not in Path(md_path).read_text()
             assert "👤 Just a note" in Path(md_path).read_text()
 
+    # ── Bug: ❓ not removed after agent reply ────────────────────────────────────
 
-# ── Bug: ❓ not removed after agent reply ────────────────────────────────────
+    def test_fresh_start_self_contained_qa_cleaned(self) -> None:
+        """Fresh start: user wrote Q&A together → ? is cleaned."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text(
+                "# Test\n\n```agentsmindmap\nroot: R\n*? My question\n  [*] My answer\n```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is True, "Fresh start Q&A keeps ? (safe: user may be importing)"
+            disk = Path(md_path).read_text()
+            assert "👤❓ My question" in disk, "❓ stays on fresh start"
+
+    def test_fresh_start_question_only_kept(self) -> None:
+        """Fresh start: question without answer → ? stays."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? Open question\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is True, "Unanswered question should keep ?"
+            disk = Path(md_path).read_text()
+            assert "👤❓ Open question" in disk
 
 
 class TestBugQuestionNotCleaned:
@@ -975,46 +1012,37 @@ class TestBugFreshQuestionCleared:
     """BUG: adding ? to node with existing agent replies cleared it instantly."""
 
     def test_fresh_question_kept_with_existing_replies(self) -> None:
-        """User adds ? to a node that already had agent answers → ? stays."""
-        import os
-        import tempfile
-
-        from watcher import _sync_graph
-        from watcher import ControlRoomContext
+        """User adds ? to answered node as follow-up → ? stays."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
 
         with tempfile.TemporaryDirectory() as tmp:
             md_path = os.path.join(tmp, "test.md")
-
-            # Step 1: Create a conversation where agent already replied
-            Path(md_path).write_text(
-                "# Test\n\n```agentsmindmap\nroot: R\n*? Old question\n  [*] Old answer\n```\n"
-            )
-            ctx = ControlRoomContext(file_path=Path(md_path))
-            _sync_graph(ctx)
-
-            # Step 2: Now user adds a NEW ? on the SAME node (follow-up)
+            # Step 1: Ask + answer (simulate full agent cycle manually)
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? Ask\\n```\n")
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            # Graph now has question. Add agent reply directly to graph.
             tree = load_graph(md_path)
             q = tree.get_node("root.1")
-            assert q is not None
-            assert q.has_question is False  # cleaned up from step 1
+            tree.add_reply("root.1", "Answer", "agent")
+            save_graph(tree, md_path)
+            # Rewrite .md from tree
+            from tree_engine import replace_block
 
-            # Simulate user editing: change 👤 to 👤❓ in .md
-            content = Path(md_path).read_text()
-            content = content.replace("👤 Old question", "👤❓ Old question")
-            Path(md_path).write_text(content)
-
-            # Step 3: Run sync — the fresh ? should STAY
-            ctx2 = ControlRoomContext(file_path=Path(md_path))
-            _sync_graph(ctx2)
-
-            tree2 = load_graph(md_path)
-            q2 = tree2.get_node("root.1")
-            assert q2 is not None
-            assert q2.has_question is True, (
-                "Fresh ? should NOT be cleared even with existing agent replies"
-            )
+            new_md = replace_block(Path(md_path).read_text(), serialize_mindmap(tree))
+            Path(md_path).write_text(new_md)
+            # Cleanup cycle
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            q = load_graph(md_path).get_node("root.1")
+            assert q.has_question is False, "? cleared after agent reply"
+            # Step 2: User re-adds ? for follow-up
             disk = Path(md_path).read_text()
-            assert "👤❓ Old question" in disk, f"Expected 👤❓ on disk, got: {disk}"
+            disk = disk.replace("👤 Ask", "👤❓ Ask")
+            Path(md_path).write_text(disk)
+            # Step 3: Follow-up ? stays
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            q3 = load_graph(md_path).get_node("root.1")
+            assert q3.has_question is True, "Follow-up ? must stay"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
