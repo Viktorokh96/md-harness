@@ -1015,3 +1015,280 @@ class TestBugFreshQuestionCleared:
             )
             disk = Path(md_path).read_text()
             assert "👤❓ Old question" in disk, f"Expected 👤❓ on disk, got: {disk}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# [focus] — E2E: Focus → Unfocus → Full Tree Restore
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFocusE2E:
+    """End-to-end: focus mode, unfocus, data preservation."""
+
+    def test_focus_shows_only_subtree(self) -> None:
+        """In focus mode, .md has only the focused subtree."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "* Topic A\n"
+                "*[focus] Topic B\n"
+                "  * Sub B\n"
+                "* Topic C\n"
+                "```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            disk = Path(md_path).read_text()
+            # Focused subtree only
+            assert "Topic B" in disk
+            assert "Sub B" in disk
+            # Other topics NOT visible
+            assert "Topic A" not in disk
+            assert "Topic C" not in disk
+            # Graph has full tree
+            g = load_graph(md_path)
+            contents = {n.content for n in g.all_nodes()}
+            assert "Topic A" in contents
+            assert "Topic B" in contents
+            assert "Topic C" in contents
+            assert "Sub B" in contents
+
+    def test_unfocus_restores_full_tree(self) -> None:
+        """Removing [focus] restores full tree from .graph.json."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+
+            # Step 1: focus
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "* Topic A\n"
+                "*[focus] Topic B\n"
+                "  * Sub B\n"
+                "* Topic C\n"
+                "```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Verify focus active
+            assert "Topic A" not in Path(md_path).read_text()
+
+            # Step 2: remove focus from .md
+            # (simulate user editing the focused .md to remove [focus])
+            current = Path(md_path).read_text()
+            current = current.replace("root: [focus] Topic B", "root: R")
+            # Also restore the full content that user would see when unfocusing
+            # Actually, user just removes [focus] from the root line
+            Path(md_path).write_text(current)
+
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            disk = Path(md_path).read_text()
+            # Full tree restored
+            assert "Topic A" in disk
+            assert "Topic B" in disk
+            assert "Topic C" in disk
+            assert "Sub B" in disk
+            # No focus marker
+            assert "[focus]" not in disk
+
+    def test_focus_unfocus_preserves_all_data(self) -> None:
+        """Round-trip: focus → unfocus → all nodes intact."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+
+            # Create initial tree
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "* Topic A\n"
+                "  * Subtopic A1\n"
+                "    * Deep A1a\n"
+                "* Topic B\n"
+                "* Topic C\n"
+                "```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Count initial nodes
+            g1 = load_graph(md_path)
+            initial_count = len(g1.all_nodes())
+            initial_contents = sorted(n.content for n in g1.all_nodes())
+
+            # Focus on Topic A
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "*[focus] Topic A\n"
+                "  * Subtopic A1\n"
+                "    * Deep A1a\n"
+                "* Topic B\n"
+                "* Topic C\n"
+                "```\n"
+            )
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            # Unfocus — just remove [focus] from original
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "* Topic A\n"
+                "  * Subtopic A1\n"
+                "    * Deep A1a\n"
+                "* Topic B\n"
+                "* Topic C\n"
+                "```\n"
+            )
+            ctx3 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx3)
+
+            # Verify everything intact
+            g3 = load_graph(md_path)
+            final_count = len(g3.all_nodes())
+            final_contents = sorted(n.content for n in g3.all_nodes())
+            assert final_count == initial_count, f"Lost nodes: {initial_count} → {final_count}"
+            assert final_contents == initial_contents
+
+    def test_double_focus_unfocus(self) -> None:
+        """Multiple focus/unfocus cycles don't corrupt data."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n* A\n* B\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+            ref_count = len(load_graph(md_path).all_nodes())
+
+            for _ in range(3):
+                # Focus on A
+                Path(md_path).write_text(
+                    "# Test\n\n```agentsmindmap\nroot: R\n*[focus] A\n* B\n```\n"
+                )
+                _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+                assert "B" not in Path(md_path).read_text()
+
+                # Unfocus
+                Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n* A\n* B\n```\n")
+                _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+                assert "B" in Path(md_path).read_text()
+
+            assert len(load_graph(md_path).all_nodes()) == ref_count
+
+    def test_focus_preserves_agent_replies(self) -> None:
+        """Agent replies under focused node are preserved."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "* Other\n"
+                "*[focus] Q\n"
+                "  🤖 Answer 1\n"
+                "  🤖 Answer 2\n"
+                "* Another\n"
+                "```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            g = load_graph(md_path)
+            fn = g.focused_node
+            assert fn is not None
+            assert len(fn.children) == 2
+            assert fn.children[0].content == "Answer 1"
+            assert fn.children[1].content == "Answer 2"
+
+    def test_focus_switching_preserves_data(self) -> None:
+        """Switching focus from one node to another works."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n* A\n* B\n* C\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+            ref_count = len(load_graph(md_path).all_nodes())
+
+            # Focus on A
+            Path(md_path).write_text(
+                "# Test\n\n```agentsmindmap\nroot: R\n*[focus] A\n* B\n* C\n```\n"
+            )
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            assert "B" not in Path(md_path).read_text()
+
+            # Switch focus to B (adds [focus] to B, removes from A)
+            Path(md_path).write_text(
+                "# Test\n\n```agentsmindmap\nroot: R\n* A\n*[focus] B\n* C\n```\n"
+            )
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            disk = Path(md_path).read_text()
+            assert "B" in disk
+            assert "A" not in disk
+            assert "C" not in disk
+
+            # Final unfocus
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n* A\n* B\n* C\n```\n")
+            _sync_graph(ControlRoomContext(file_path=Path(md_path)))
+            assert len(load_graph(md_path).all_nodes()) == ref_count
+            assert "A" in Path(md_path).read_text()
+            assert "B" in Path(md_path).read_text()
+            assert "C" in Path(md_path).read_text()
+
+    def test_focus_with_hidden_children(self) -> None:
+        """Focus on node with hidden children — children visible in focus."""
+        import os, tempfile
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text(
+                "# Test\n\n"
+                "```agentsmindmap\n"
+                "root: R\n"
+                "*[focus] F\n"
+                "  *[hide] Hidden\n"
+                "    * Grandchild\n"
+                "* Other\n"
+                "```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            g = load_graph(md_path)
+            fn = g.focused_node
+            assert fn is not None
+            # Hidden child exists in graph
+            hidden = fn.children[0]
+            assert hidden.hidden is True
+            assert hidden.content == "Hidden"
+            # Grandchild exists
+            assert len(hidden.children) == 1
+            assert hidden.children[0].content == "Grandchild"

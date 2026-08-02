@@ -77,7 +77,7 @@ def _remove_thinking_markers(ctx: ControlRoomContext) -> str:
 # ── Graph sync ──────────────────────────────────────────────────────────────
 
 
-def _sync_graph(ctx: ControlRoomContext) -> str:
+def _sync_graph(ctx: ControlRoomContext) -> str:  # noqa: PLR0912
     """Sync .md changes into .graph.json. Returns the new .md content.
 
     Side effects:
@@ -117,6 +117,22 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
     # Save question state BEFORE merge (merge mutates full in-place)
     old_questions = {n.id for n in full.all_nodes() if n.has_question}
     old_archived = {n.id for n in full.all_nodes() if n.archived}
+
+    # Detect focus removal: old graph had focus, new .md has none
+    old_focus = full.focused_node
+    new_focus = md_tree.focused_node
+    focus_removed = old_focus is not None and new_focus is None
+
+    if focus_removed:
+        # Focus just removed — restore full tree from .graph.json, ignore .md
+        assert old_focus is not None
+        old_focus.focused = False
+        save_graph(full, md_path)
+        block = serialize_mindmap(full)
+        new_content = replace_block(md_text, block)
+        ctx.file_path.write_text(new_content)
+        return new_content
+
     merged = merge_md_into_graph(full, md_tree)
 
     # Cleanup: remove ❓ from answered questions (agent has replied)
