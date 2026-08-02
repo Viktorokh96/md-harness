@@ -114,14 +114,18 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
     if full is None:
         full = md_tree
 
+    # Save question state BEFORE merge (merge mutates full in-place)
+    old_questions = {n.id for n in full.all_nodes() if n.has_question}
     old_archived = {n.id for n in full.all_nodes() if n.archived}
     merged = merge_md_into_graph(full, md_tree)
 
     # Cleanup: remove ❓ from answered questions (agent has replied)
+    # Only clear questions that were ALREADY pending in previous cycle,
+    # not questions the user just added (even if old replies exist).
     for node in merged.all_nodes():
         if node.has_question and node.is_user:
             has_agent_reply = any(child.is_agent for child in node.children)
-            if has_agent_reply:
+            if has_agent_reply and node.id in old_questions:
                 node.has_question = False
 
     save_graph(merged, md_path)

@@ -966,3 +966,52 @@ class TestBugQuestionNotCleaned:
             q2 = tree2.get_node("root.1")
             assert q2.has_question is False
             assert "👤❓" not in Path(md_path).read_text()
+
+
+# ── Bug: ? cleared on nodes with existing agent replies ──────────────────────
+
+
+class TestBugFreshQuestionCleared:
+    """BUG: adding ? to node with existing agent replies cleared it instantly."""
+
+    def test_fresh_question_kept_with_existing_replies(self) -> None:
+        """User adds ? to a node that already had agent answers → ? stays."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph
+        from watcher import ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+
+            # Step 1: Create a conversation where agent already replied
+            Path(md_path).write_text(
+                "# Test\n\n```agentsmindmap\nroot: R\n*? Old question\n  [*] Old answer\n```\n"
+            )
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Step 2: Now user adds a NEW ? on the SAME node (follow-up)
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is False  # cleaned up from step 1
+
+            # Simulate user editing: change 👤 to 👤❓ in .md
+            content = Path(md_path).read_text()
+            content = content.replace("👤 Old question", "👤❓ Old question")
+            Path(md_path).write_text(content)
+
+            # Step 3: Run sync — the fresh ? should STAY
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            tree2 = load_graph(md_path)
+            q2 = tree2.get_node("root.1")
+            assert q2 is not None
+            assert q2.has_question is True, (
+                "Fresh ? should NOT be cleared even with existing agent replies"
+            )
+            disk = Path(md_path).read_text()
+            assert "👤❓ Old question" in disk, f"Expected 👤❓ on disk, got: {disk}"
