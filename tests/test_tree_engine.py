@@ -6,6 +6,8 @@ import pytest
 
 from tree_engine import MindNode
 from tree_engine import MindTree
+from tree_engine import diff_trees
+from tree_engine import has_pending_questions
 from tree_engine import parse_mindmap
 from tree_engine import replace_block
 from tree_engine import serialize_mindmap
@@ -73,8 +75,8 @@ class TestMindTree:
     def test_to_outline(self) -> None:
         outline = _sample_tree().to_outline()
         assert "📌 [root]" in outline
-        assert "* [root.1] Hello" in outline
-        assert "[*] [root.1.1] Hi" in outline
+        assert "👤 [root.1] Hello" in outline
+        assert "🤖 [root.1.1] Hi" in outline
 
 
 # ── Parser ──────────────────────────────────────────────────────────────────
@@ -190,3 +192,110 @@ def _sample_tree() -> MindTree:
 
 def _md(body: str) -> str:
     return f"# Test\n\n```agentsmindmap\n{body}```\n"
+
+
+# ── Question (?) marker ──────────────────────────────────────────────────────
+
+
+class TestQuestionParsing:
+    def test_user_question(self) -> None:
+        """*? sets has_question=True."""
+        tree = parse_mindmap(_md("root: R\n*? Help me\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.has_question is True
+        assert n.is_user is True
+        assert n.content == "Help me"
+
+    def test_emoji_question(self) -> None:
+        """👤❓ also parsed as question."""
+        tree = parse_mindmap(_md("root: R\n👤❓ Help me\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.has_question is True
+        assert n.content == "Help me"
+
+    def test_plain_user_no_question(self) -> None:
+        """* without ? has_question=False."""
+        tree = parse_mindmap(_md("root: R\n* Note\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.has_question is False
+
+    def test_agent_no_question(self) -> None:
+        """🤖 (agent) never has has_question=True."""
+        tree = parse_mindmap(_md("root: R\n🤖 Reply\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.has_question is False
+        assert n.is_agent is True
+
+    def test_old_format_question(self) -> None:
+        """[*]? would be agent question — has_question only for users."""
+        # [*]? is not a valid user question marker
+        # covered by test_agent_no_question
+
+
+class TestQuestionSerialize:
+    def test_question_output(self) -> None:
+        """👤❓ appears in serialized output."""
+        tree = parse_mindmap(_md("root: R\n*? Q\n"))
+        s = serialize_mindmap(tree)
+        assert "👤❓ Q" in s
+
+    def test_question_round_trip(self) -> None:
+        """Parse → serialize → reparse preserves has_question."""
+        original = _md("root: R\n*? Ask\n  🤖 Answer\n")
+        t1 = parse_mindmap(original)
+        n1 = t1.get_node("root.1")
+        assert n1 is not None and n1.has_question is True
+        t2 = parse_mindmap("# X\n\n" + serialize_mindmap(t1))
+        n2 = t2.get_node("root.1")
+        assert n2 is not None and n2.has_question is True
+        n3 = t2.get_node("root.1.1")
+        assert n3 is not None and n3.has_question is False
+
+    def test_question_outline(self) -> None:
+        """Outline shows 👤❓ for questions."""
+        tree = parse_mindmap(_md("root: R\n*? Q\n"))
+        outline = tree.to_outline()
+        assert "👤❓ [root.1] Q" in outline
+
+    def test_question_to_json(self) -> None:
+        """has_question survives JSON round-trip."""
+        tree = parse_mindmap(_md("root: R\n*? Q\n"))
+        d = tree.to_dict()
+        t2 = MindTree.from_dict(d)
+        n4 = t2.get_node("root.1")
+        assert n4 is not None and n4.has_question is True
+
+
+class TestQuestionDiff:
+    def test_question_flag_change_detected(self) -> None:
+        """Adding ? to an existing node is detected as content change."""
+        old = parse_mindmap(_md("root: R\n* Note\n"))
+        new = parse_mindmap(_md("root: R\n*? Note\n"))
+        has_change, diff = diff_trees(old, new)
+        assert has_change is True
+        assert "changed" in diff.lower()
+
+    def test_question_removal_detected(self) -> None:
+        """Removing ? is detected."""
+        old = parse_mindmap(_md("root: R\n*? Q\n"))
+        new = parse_mindmap(_md("root: R\n* Q\n"))
+        has_change, diff = diff_trees(old, new)
+        assert has_change is True
+
+
+class TestHasPendingQuestions:
+    def test_with_question(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*? Q\n"))
+        assert has_pending_questions(tree) is True
+
+    def test_without_question(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Note\n"))
+        assert has_pending_questions(tree) is False
+
+    def test_agent_reply_not_question(self) -> None:
+        tree = parse_mindmap(_md("root: R\n🤖 Answer\n"))
+        assert has_pending_questions(tree) is False

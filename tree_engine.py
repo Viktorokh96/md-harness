@@ -36,10 +36,11 @@ BLOCK_END = "```"
 
 # ── Regex ───────────────────────────────────────────────────────────────────
 
-HIDE_RE = re.compile(r"^(\*|\[\*\])\[hide\]\s")
-ARCHIVE_RE = re.compile(r"^(\*|\[\*\])\[archive\](\s.*)?$")
-ARCHIVE_REASON_RE = re.compile(r"^(\*|\[\*\])\[archive:\s*(.+?)\]\s?(.*)?$")
-TAG_RE = re.compile(r"^(\*|\[\*\])\s")
+HIDE_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[hide\]\s")
+ARCHIVE_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[archive\](\s.*)?$")
+ARCHIVE_REASON_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[archive:\s*(.+?)\]\s?(.*)?$")
+TAG_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\s")
+QUESTION_RE = re.compile(r"^(👤❓|👤\?|\*\?)\s")
 UUID_RE = re.compile(r"<!--\s*uuid:(\S+)\s*-->")
 # ── Node ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ class MindNode:
     depth: int
     uuid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     hidden: bool = False
+    has_question: bool = False
     archived: bool = False
     archive_reason: str = ""
     children: list[MindNode] = field(default_factory=list)
@@ -81,7 +83,7 @@ class MindNode:
         return ids
 
     def __repr__(self) -> str:
-        prefix = "*" if self.is_user else "[*]"
+        prefix = "👤❓" if self.has_question else ("👤" if self.is_user else "🤖")
         flags = ""
         if self.hidden:
             flags += "[hide]"
@@ -185,7 +187,11 @@ class MindTree:
                 marker = (
                     "🗄"
                     if node.archived
-                    else ("📦" if node.hidden else ("*" if node.is_user else "[*]"))
+                    else (
+                        "📦"
+                        if node.hidden
+                        else ("👤❓" if node.has_question else ("👤" if node.is_user else "🤖"))
+                    )
                 )
                 lines.append(f"{prefix}{marker} [{node.id}] {node.content}")
             if (node.hidden or node.archived) and not show_hidden:
@@ -204,6 +210,7 @@ class MindTree:
                 "content": node.content,
                 "author": node.author,
                 "depth": node.depth,
+                "has_question": node.has_question,
                 "hidden": node.hidden,
                 "children": [_node_to_dict(c) for c in node.children],
             }
@@ -224,6 +231,7 @@ class MindTree:
                 author=d["author"],
                 depth=d["depth"],
                 hidden=d.get("hidden", False),
+                has_question=d.get("has_question", False),
                 archived=d.get("archived", False),
                 archive_reason=d.get("archive_reason", ""),
             )
@@ -286,36 +294,43 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
             msg = f"Indent must be multiple of 2: {line!r}"
             raise ValueError(msg)
 
+        has_question = False
         hidden = False
         archived = False
         archive_reason = ""
 
+        question_m = QUESTION_RE.match(stripped)
         hide_m = HIDE_RE.match(stripped)
         arc_reason_m = ARCHIVE_REASON_RE.match(stripped)
         arc_m = ARCHIVE_RE.match(stripped)
         tag_m = TAG_RE.match(stripped)
 
-        if hide_m:
+        if question_m:
+            tag = question_m.group(1)
+            author = "agent" if tag in ("[*]", "🤖") else "user"
+            has_question = author == "user"
+            content = stripped[question_m.end() :].strip()
+        elif hide_m:
             tag = hide_m.group(1)
-            author = "agent" if tag == "[*]" else "user"
+            author = "agent" if tag in ("[*]", "🤖") else "user"
             content = stripped[hide_m.end() :].strip()
             hidden = True
         elif arc_reason_m:
             tag = arc_reason_m.group(1)
-            author = "agent" if tag == "[*]" else "user"
+            author = "agent" if tag in ("[*]", "🤖") else "user"
             archive_reason = arc_reason_m.group(2).strip()
             rest = arc_reason_m.group(3) or ""
             content = rest.strip()
             archived = True
         elif arc_m:
             tag = arc_m.group(1)
-            author = "agent" if tag == "[*]" else "user"
+            author = "agent" if tag in ("[*]", "🤖") else "user"
             rest = arc_m.group(2) or ""
             content = rest.strip()
             archived = True
         elif tag_m:
             tag = tag_m.group(1)
-            author = "agent" if tag == "[*]" else "user"
+            author = "agent" if tag in ("[*]", "🤖") else "user"
             content = stripped[tag_m.end() :].strip()
         else:
             parent_node = stack.get(depth - 1)
@@ -346,6 +361,7 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
             "author": author,
             "depth": depth,
             "hidden": hidden,
+            "has_question": has_question,
             "archived": archived,
             "archive_reason": archive_reason,
         }
@@ -373,7 +389,7 @@ def serialize_mindmap(tree: MindTree) -> str:
             lines.append(f"root: {node.content}")
         else:
             indent = "  " * (depth - 1)
-            tag = "*" if node.is_user else "[*]"
+            tag = "👤❓" if node.has_question else ("👤" if node.is_user else "🤖")
             if node.archived:
                 reason = node.archive_reason
                 tag = f"{tag}[archive{f': {reason}' if reason else ''}]"
@@ -417,6 +433,7 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
             g.content = m.content
             g.hidden = m.hidden
             g.archived = m.archived
+            g.has_question = m.has_question
             g.archive_reason = m.archive_reason
 
             g_children_by_uuid = {c.uuid: c for c in g.children}
@@ -504,7 +521,7 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
 
     def _compare(o: MindNode | None, n: MindNode | None, path: str) -> None:
         if o is None and n is not None:
-            tag = "*" if n.is_user else "[*]"
+            tag = "👤" if n.is_user else "🤖"
             h = "[hide]" if n.hidden else ""
             a = "[archive]" if n.archived else ""
             new_nodes.append(f"  {tag}{h}{a} {n.content}  [id: {n.id}]")
@@ -513,7 +530,7 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
             return
         if n is None or o is None:
             return
-        if o.content != n.content:
+        if o.content != n.content or o.has_question != n.has_question:
             changed.append(f"  [{n.id}] changed: {o.content[:60]!r} → {n.content[:60]!r}")
         if o.hidden and not n.hidden:
             unhidden.append(f"  [{n.id}] unhidden: {n.content[:60]}")
@@ -552,6 +569,11 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
     return has_change, "\n".join(parts) if parts else "(no structural changes)"
 
 
+def has_pending_questions(tree: MindTree) -> bool:
+    """Return True if any non-root node has has_question=True."""
+    return any(node.has_question for node in tree.all_nodes() if node is not tree.root)
+
+
 # ── Renderer ────────────────────────────────────────────────────────────────
 
 
@@ -567,7 +589,7 @@ def render_mermaid(tree: MindTree) -> str:
             elif node.hidden:
                 marker = "📦"
             else:
-                marker = "👤" if node.is_user else "🤖"
+                marker = "👤❓" if node.has_question else ("👤" if node.is_user else "🤖")
             lines.append(f"  {indent}{marker} {_sanitize(node.content)}")
         if node.hidden or node.archived:
             return

@@ -97,7 +97,7 @@ class TestHideParsing:
     def test_serialize_excludes_hidden_children(self) -> None:
         tree = parse_mindmap(_md("root: R\n*[hide] H\n  [*] A1\n  [*] A2\n"))
         s = serialize_mindmap(tree)
-        assert "*[hide] H" in s
+        assert "👤[hide] H" in s
         assert "A1" not in s
         assert "A2" not in s
 
@@ -353,7 +353,7 @@ class TestArchiveParsing:
     def test_serialize_archive(self) -> None:
         tree = parse_mindmap(_md("root: R\n*[archive] Old\n  [*] Reply\n"))
         s = serialize_mindmap(tree)
-        assert "*[archive] Old" in s
+        assert "👤[archive] Old" in s
         assert "[*] Reply" not in s
 
     def test_outline_archive(self) -> None:
@@ -757,3 +757,212 @@ class TestRegressionArchiveRestore:
             assert node is not None
             assert node.author == "agent", f"Author lost: {node.author}"
             assert not node.archived
+
+
+# ── Question → cleanup E2E ──────────────────────────────────────────────────
+
+
+class TestQuestionCleanupE2E:
+    """E2E: user asks question → agent replies → ❓ removed."""
+
+    def test_cleanup_after_agent_reply(self) -> None:
+        """_sync_graph removes ❓ when agent has replied."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph
+        from watcher import ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+
+            # Step 1: User creates question
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? What is 2+2?\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Verify question marker present
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is True
+            assert "👤❓" in Path(md_path).read_text()
+
+            # Step 2: Simulate agent reply
+            reply = MindNode(
+                id="root.1.1",
+                content="2+2 = 4",
+                author="agent",
+                depth=q.depth + 1,
+            )
+            q.add_child(reply)
+            tree._node_index[reply.id] = reply
+            save_graph(tree, md_path)
+            Path(md_path).write_text(
+                "# Test\n\n```agentsmindmap\n"
+                + serialize_mindmap(tree).split("```agentsmindmap\n")[1]
+            )
+
+            # Step 3: _sync_graph cleanup
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            # Verify ❓ removed
+            tree2 = load_graph(md_path)
+            q2 = tree2.get_node("root.1")
+            assert q2 is not None
+            assert q2.has_question is False, "❓ should be removed after agent reply"
+            content = Path(md_path).read_text()
+            assert "👤❓" not in content
+            assert "👤 What is 2+2?" in content
+
+    def test_question_unanswered_stays(self) -> None:
+        """Question without agent reply keeps ❓."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph
+        from watcher import ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? Still open\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Run sync again (simulate next cycle)
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is True, "❓ should stay for unanswered questions"
+
+    def test_note_no_question_no_agent(self) -> None:
+        """* note (no ?) → no has_question, agent not triggered."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph, ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n* Just a note\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            tree = load_graph(md_path)
+            n = tree.get_node("root.1")
+            assert n is not None
+            assert n.has_question is False
+            assert "👤❓" not in Path(md_path).read_text()
+            assert "👤 Just a note" in Path(md_path).read_text()
+
+
+# ── Bug: ❓ not removed after agent reply ────────────────────────────────────
+
+
+class TestBugQuestionNotCleaned:
+    """BUG: agent answered but ❓ stayed — cleanup wasn't called after agent."""
+
+    def test_cleanup_removes_question_marker_from_file(self) -> None:
+        """After agent replies, 👤❓ becomes 👤 on disk."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph
+        from watcher import ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+
+            # Step 1: Create question
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? Ask me\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Verify question present
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            assert q is not None
+            assert q.has_question is True
+            disk1 = Path(md_path).read_text()
+            assert "👤❓ Ask me" in disk1, f"Expected 👤❓ on disk, got: {disk1}"
+
+            # Step 2: Simulate agent reply
+            reply = MindNode(
+                id="root.1.1",
+                content="Answer",
+                author="agent",
+                depth=q.depth + 1,
+            )
+            q.add_child(reply)
+            tree._node_index[reply.id] = reply
+            save_graph(tree, md_path)
+            # Rewrite .md to match graph
+            from tree_engine import replace_block
+
+            new_block = (
+                "```agentsmindmap\n" + serialize_mindmap(tree).split("```agentsmindmap\n")[1]
+            )
+            Path(md_path).write_text(replace_block(Path(md_path).read_text(), new_block))
+
+            # Step 3: Run cleanup (this is what _sync_graph does after agent)
+            ctx2 = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx2)
+
+            # Verify ❓ removed from disk
+            disk2 = Path(md_path).read_text()
+            assert "👤❓" not in disk2, f"❓ should be removed, got: {disk2}"
+            assert "👤 Ask me" in disk2, f"Expected 👤 after cleanup, got: {disk2}"
+
+            # Verify graph state
+            tree2 = load_graph(md_path)
+            q2 = tree2.get_node("root.1")
+            assert q2 is not None
+            assert q2.has_question is False
+
+    def test_cleanup_idempotent(self) -> None:
+        """Running cleanup twice is safe — ❓ stays gone."""
+        import os
+        import tempfile
+
+        from watcher import _sync_graph
+        from watcher import ControlRoomContext
+
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = os.path.join(tmp, "test.md")
+            Path(md_path).write_text("# Test\n\n```agentsmindmap\nroot: R\n*? Q\n```\n")
+            ctx = ControlRoomContext(file_path=Path(md_path))
+            _sync_graph(ctx)
+
+            # Add agent reply
+            tree = load_graph(md_path)
+            q = tree.get_node("root.1")
+            reply = MindNode(
+                id="root.1.1",
+                content="A",
+                author="agent",
+                depth=q.depth + 1,
+            )
+            q.add_child(reply)
+            tree._node_index[reply.id] = reply
+            save_graph(tree, md_path)
+            from tree_engine import replace_block
+
+            new_block = (
+                "```agentsmindmap\n" + serialize_mindmap(tree).split("```agentsmindmap\n")[1]
+            )
+            Path(md_path).write_text(replace_block(Path(md_path).read_text(), new_block))
+
+            # Cleanup twice
+            for _ in range(2):
+                ctx2 = ControlRoomContext(file_path=Path(md_path))
+                _sync_graph(ctx2)
+
+            tree2 = load_graph(md_path)
+            q2 = tree2.get_node("root.1")
+            assert q2.has_question is False
+            assert "👤❓" not in Path(md_path).read_text()

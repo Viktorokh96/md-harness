@@ -28,6 +28,7 @@ from agent import ControlRoomContext
 from agent import create_agent
 from agent import process_change
 from tree_engine import diff_trees
+from tree_engine import has_pending_questions
 from tree_engine import load_graph
 from tree_engine import merge_md_into_graph
 from tree_engine import parse_mindmap
@@ -38,7 +39,7 @@ from tree_engine import serialize_mindmap
 MIND_MAP_TEMPLATE = """\
 # CONTROL ROOM
 
-> `*` сообщение · `[*]` ответ · `*[hide]` скрыть · `*[archive]` архивировать · `*[archive: причина]`
+> `👤` заметка · `👤❓` вопрос · `🤖` ответ · `👤[hide]` скрыть · `👤[archive]` архив
 > Отступ 2 пробела = вложенность · скрытые/архивные ветки — в `.graph.json` / `archive/`
 
 ----
@@ -48,7 +49,7 @@ root: CONTROL ROOM
 ```
 """
 
-THINKING_MARKER = "[*] ...thinking..."
+THINKING_MARKER = "🤖 ...thinking..."
 
 
 def _append_placeholder(ctx: ControlRoomContext) -> str:
@@ -93,8 +94,7 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
 
     full = load_graph(md_path)
     if full is None:
-        save_graph(md_tree, md_path)
-        return md_text
+        full = md_tree
 
     # Detect [archive] / unarchive BEFORE merge (children still intact)
     from archiver import archive_branch
@@ -116,6 +116,14 @@ def _sync_graph(ctx: ControlRoomContext) -> str:
 
     old_archived = {n.id for n in full.all_nodes() if n.archived}
     merged = merge_md_into_graph(full, md_tree)
+
+    # Cleanup: remove ❓ from answered questions (agent has replied)
+    for node in merged.all_nodes():
+        if node.has_question and node.is_user:
+            has_agent_reply = any(child.is_agent for child in node.children)
+            if has_agent_reply:
+                node.has_question = False
+
     save_graph(merged, md_path)
     for node in merged.all_nodes():
         if node is merged.root:
@@ -178,8 +186,9 @@ def run_once(agent: Any, ctx: ControlRoomContext, *, dry_run: bool = False) -> N
     if dry_run:
         print("[watcher] Dry run — skipping agent call.")
         return
-    if not has_change:
-        print("[watcher] No content change — skipping LLM.")
+    has_questions = has_pending_questions(new_graph) if new_graph else False
+    if not has_questions:
+        print("[watcher] No questions — mind map mode (skipping LLM).")
         return
 
     _append_placeholder(ctx)
@@ -187,6 +196,8 @@ def run_once(agent: Any, ctx: ControlRoomContext, *, dry_run: bool = False) -> N
     result = process_change(agent, ctx, diff_text, context_lines)
     print(f"[watcher] Agent finished: {result[:300]}")
     _remove_thinking_markers(ctx)
+    # Re-sync to cleanup answered questions (remove ❓)
+    _sync_graph(ctx)
     ctx.last_content = fpath.read_text()
     ctx.last_mtime = fpath.stat().st_mtime
 
