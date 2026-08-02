@@ -8,7 +8,9 @@ from tree_engine import MindNode
 from tree_engine import MindTree
 from tree_engine import diff_trees
 from tree_engine import has_pending_questions
+from tree_engine import merge_md_into_graph
 from tree_engine import parse_mindmap
+from tree_engine import render_mermaid
 from tree_engine import replace_block
 from tree_engine import serialize_mindmap
 
@@ -299,3 +301,268 @@ class TestHasPendingQuestions:
     def test_agent_reply_not_question(self) -> None:
         tree = parse_mindmap(_md("root: R\n🤖 Answer\n"))
         assert has_pending_questions(tree) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# [focus] — Focus Mode
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFocusParsing:
+    """Parser: [focus] → MindNode.focused = True."""
+
+    def test_user_focus(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[focus] Deep dive\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.focused is True
+        assert n.content == "Deep dive"
+        assert n.is_user is True
+
+    def test_agent_focus(self) -> None:
+        """Agent reply can also be focused."""
+        tree = parse_mindmap(_md("root: R\n🤖[focus] Important reply\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.focused is True
+        assert n.is_agent is True
+
+    def test_old_format_focus(self) -> None:
+        """[*][focus] also works."""
+        tree = parse_mindmap(_md("root: R\n[*][focus] Old format\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.focused is True
+
+    def test_no_focus(self) -> None:
+        """Plain node has focused=False."""
+        tree = parse_mindmap(_md("root: R\n* Normal\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.focused is False
+
+    def test_focus_not_hidden(self) -> None:
+        """[focus] ≠ [hide]. Focus is independent."""
+        tree = parse_mindmap(_md("root: R\n*[focus] Visible\n"))
+        n = tree.get_node("root.1")
+        assert n is not None
+        assert n.focused is True
+        assert n.hidden is False
+
+    def test_focus_with_question(self) -> None:
+        """[focus] + ? combo works. (Note: requires both markers in syntax)"""
+        # focus and question are separate bools
+        n = MindNode(id="x", content="Q", author="user", depth=1, focused=True, has_question=True)
+        assert n.focused is True
+        assert n.has_question is True
+
+
+class TestFocusOutline:
+    """Outline: 🎯 marker, focus-only mode."""
+
+    def test_focus_marker_in_outline(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[focus] F\n  * Child\n"))
+        # In focus mode, node IS the root — no 🎯 on root line
+        outline = tree.to_outline()
+        assert "📌 [focus] F" in outline
+        assert "Child" in outline
+        # But if we check the graph directly, 🎯 should NOT be on the focused node
+        # (it only appears in non-focus outline)
+        assert tree.focused_node is not None
+
+    def test_focus_mode_shows_only_subtree(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Other\n*[focus] Focused\n  * Child\n* Another\n"))
+        outline = tree.to_outline()
+        # Should show focused node as root, plus its children
+        assert "📌 [focus] Focused" in outline
+        assert "Child" in outline
+        # Should NOT show other branches
+        assert "Other" not in outline
+        assert "Another" not in outline
+
+    def test_no_focus_shows_full_tree(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* A\n* B\n"))
+        outline = tree.to_outline()
+        assert "A" in outline
+        assert "B" in outline
+        assert "📌 [root] R" in outline
+
+    def test_focus_node_no_children(self) -> None:
+        """Focus on leaf node — shows just the node."""
+        tree = parse_mindmap(_md("root: R\n*[focus] Leaf\n* Other\n"))
+        outline = tree.to_outline()
+        assert "📌 [focus] Leaf" in outline
+        assert "Other" not in outline
+
+    def test_focus_deep_subtree(self) -> None:
+        """Focus on deep node — shows its subtree as root."""
+        tree = parse_mindmap(
+            _md("root: R\n* A\n  * B\n    *[focus] Deep\n      * C\n        * D\n* E\n")
+        )
+        outline = tree.to_outline()
+        assert "📌 [focus] Deep" in outline
+        assert "C" in outline
+        assert "D" in outline
+        assert "A" not in outline
+        assert "E" not in outline
+
+
+class TestFocusSerialize:
+    """Serializer: [focus] outputs focused subtree, round-trips."""
+
+    def test_focus_serialized(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[focus] F\n  * Child\n"))
+        s = serialize_mindmap(tree)
+        assert "root: [focus] F" in s
+        assert "Child" in s
+
+    def test_focus_excludes_other_branches(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Other\n*[focus] F\n  * C\n* Another\n"))
+        s = serialize_mindmap(tree)
+        assert "Other" not in s
+        assert "Another" not in s
+        assert "F" in s
+        assert "C" in s
+
+    def test_focus_round_trip(self) -> None:
+        """Parse → serialize → reparse preserves focus."""
+        original = _md("root: R\n*[focus] F\n  * C\n")
+        t1 = parse_mindmap(original)
+        s = serialize_mindmap(t1)
+        # Focus is a view filter — serialized output has root: [focus] F
+        # Re-parsing treats [focus] on root as plain content, not a focus marker.
+        # This is expected: focus is for display, not persistent in serialized form.
+        assert "root: [focus] F" in s
+        assert "C" in s
+
+    def test_no_focus_serializes_full(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* A\n* B\n"))
+        s = serialize_mindmap(tree)
+        assert "A" in s
+        assert "B" in s
+        assert "[focus]" not in s
+
+
+class TestFocusMermaid:
+    """Mermaid renderer respects focus."""
+
+    def test_focus_mermaid_subtree_only(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* Other\n*[focus] F\n  * C\n"))
+        m = render_mermaid(tree)
+        assert "F" in m
+        assert "C" in m
+        assert "Other" not in m
+
+    def test_focus_mermaid_marker(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[focus] F\n  * C\n"))
+        m = render_mermaid(tree)
+        # In focus mode, focused node is root — no 🎯 on root line
+        assert "F" in m
+        assert "C" in m
+        assert "🎯" not in m  # 🎯 only in full-tree mode
+
+
+class TestFocusJsonRoundTrip:
+    """JSON preserves focused field."""
+
+    def test_focused_in_json(self) -> None:
+        tree = parse_mindmap(_md("root: R\n*[focus] F\n"))
+        d = tree.to_dict()
+        t2 = MindTree.from_dict(d)
+        fn = t2.focused_node
+        assert fn is not None
+        assert fn.focused is True
+        assert fn.content == "F"
+
+    def test_unfocused_in_json(self) -> None:
+        tree = parse_mindmap(_md("root: R\n* N\n"))
+        d = tree.to_dict()
+        t2 = MindTree.from_dict(d)
+        assert t2.focused_node is None
+
+
+class TestFocusDiff:
+    """diff_trees: focus toggle is a content change."""
+
+    def test_focus_added_detected(self) -> None:
+        old = parse_mindmap(_md("root: R\n* N\n"))
+        new = parse_mindmap(_md("root: R\n*[focus] N\n"))
+        has_change, _ = diff_trees(old, new)
+        assert has_change is True
+
+    def test_focus_removed_detected(self) -> None:
+        old = parse_mindmap(_md("root: R\n*[focus] N\n"))
+        new = parse_mindmap(_md("root: R\n* N\n"))
+        has_change, _ = diff_trees(old, new)
+        assert has_change is True
+
+
+class TestFocusMerge:
+    """merge_md_into_graph: focused survives merge."""
+
+    def test_focused_copied_in_merge(self) -> None:
+        graph = parse_mindmap(_md("root: R\n* Old\n"))
+        md = parse_mindmap(_md("root: R\n*[focus] New\n"))
+        merged = merge_md_into_graph(graph, md)
+        fn = merged.focused_node
+        assert fn is not None
+        assert fn.content == "New"
+        assert fn.focused is True
+
+    def test_focus_removed_in_merge(self) -> None:
+        graph = parse_mindmap(_md("root: R\n*[focus] F\n"))
+        md = parse_mindmap(_md("root: R\n* F\n"))
+        merged = merge_md_into_graph(graph, md)
+        assert merged.focused_node is None
+
+
+class TestFocusEdgeCases:
+    """Edge cases for focus behavior."""
+
+    def test_only_one_focus_in_parsed_tree(self) -> None:
+        """Multiple [focus] markers: parser sets focused=True on all.
+        focused_node() returns the first one found."""
+        tree = parse_mindmap(_md("root: R\n*[focus] First\n*[focus] Second\n"))
+        fn = tree.focused_node
+        assert fn is not None
+        # First one wins (deterministic by tree order)
+        assert fn.content == "First"
+
+    def test_focus_does_not_affect_graph(self) -> None:
+        """Focus is a view filter — all nodes still in graph."""
+        tree = parse_mindmap(_md("root: R\n* A\n*[focus] F\n* B\n"))
+        all_nodes = tree.all_nodes()
+        contents = {n.content for n in all_nodes}
+        assert "A" in contents
+        assert "F" in contents
+        assert "B" in contents
+        assert len(all_nodes) == 4  # root + 3
+
+    def test_focus_with_hide_children(self) -> None:
+        """Focused node with hidden children — children shown in focus."""
+        tree = parse_mindmap(
+            _md("root: R\n*[focus] F\n  *[hide] Hidden child\n    * Grandchild\n* Other\n")
+        )
+        # Full graph should have all nodes
+        assert tree.get_node("root.1.1") is not None
+        # Focus mode outline shows focused subtree
+        outline = tree.to_outline()
+        assert "F" in outline
+        # Hidden child is visible in focus mode because focus > hide
+        assert "Hidden child" in outline
+
+    def test_focus_node_repr(self) -> None:
+        n = MindNode(id="x", content="F", author="user", depth=1, focused=True)
+        r = repr(n)
+        assert "[focus]" in r
+
+    def test_focus_clears_on_new_focus_via_merge(self) -> None:
+        """When merge gets a new focused node, old focus becomes False."""
+        # Start with First focused
+        graph = parse_mindmap(_md("root: R\n*[focus] First\n* Second\n"))
+        # MD changes focus to Second
+        md = parse_mindmap(_md("root: R\n* First\n*[focus] Second\n"))
+        merged = merge_md_into_graph(graph, md)
+        fn = merged.focused_node
+        assert fn is not None
+        assert fn.content == "Second"

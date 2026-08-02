@@ -41,6 +41,7 @@ ARCHIVE_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[archive\](\s.*)?$")
 ARCHIVE_REASON_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[archive:\s*(.+?)\]\s?(.*)?$")
 TAG_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\s")
 QUESTION_RE = re.compile(r"^(👤❓|👤\?|\*\?)\s")
+FOCUS_RE = re.compile(r"^(👤|🤖|\*|\[\*\])\[focus\]\s")
 UUID_RE = re.compile(r"<!--\s*uuid:(\S+)\s*-->")
 # ── Node ────────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ class MindNode:
     uuid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     hidden: bool = False
     has_question: bool = False
+    focused: bool = False
     archived: bool = False
     archive_reason: str = ""
     children: list[MindNode] = field(default_factory=list)
@@ -87,6 +89,8 @@ class MindNode:
         flags = ""
         if self.hidden:
             flags += "[hide]"
+        if self.focused:
+            flags += "[focus]"
         if self.archived:
             flags += "[archive]"
         return f"MindNode({self.id}, {prefix}{flags} {self.content[:40]})"
@@ -111,6 +115,14 @@ class MindTree:
     def find_nodes(self, query: str) -> list[MindNode]:
         q = query.lower()
         return [n for n in self._node_index.values() if q in n.content.lower()]
+
+    @property
+    def focused_node(self) -> MindNode | None:
+        """Return the focused node, or None."""
+        for n in self._node_index.values():
+            if n.focused:
+                return n
+        return None
 
     def add_reply(self, parent_id: str, content: str, author: str) -> MindNode:
         parent = self._node_index.get(parent_id)
@@ -176,7 +188,7 @@ class MindTree:
         return node
 
     def to_outline(self, *, show_hidden: bool = True) -> str:
-        """Indented outline with node IDs. 🗄=archived, 📦=hidden."""
+        """Indented outline. 🗄=archived, 📦=hidden, 🎯=focused."""
         lines: list[str] = []
 
         def _walk(node: MindNode, indent: int) -> None:
@@ -193,13 +205,21 @@ class MindTree:
                         else ("👤❓" if node.has_question else ("👤" if node.is_user else "🤖"))
                     )
                 )
-                lines.append(f"{prefix}{marker} [{node.id}] {node.content}")
+                focus_mark = " 🎯" if node.focused else ""
+                lines.append(f"{prefix}{marker}{focus_mark} [{node.id}] {node.content}")
             if (node.hidden or node.archived) and not show_hidden:
                 return
             for child in node.children:
                 _walk(child, indent + 1)
 
-        _walk(self.root, 0)
+        focus = self.focused_node
+        if focus is not None:
+            lines.clear()
+            lines.append(f"📌 [focus] {focus.content}")
+            for child in focus.children:
+                _walk(child, 1)
+        else:
+            _walk(self.root, 0)
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
@@ -211,6 +231,7 @@ class MindTree:
                 "author": node.author,
                 "depth": node.depth,
                 "has_question": node.has_question,
+                "focused": node.focused,
                 "hidden": node.hidden,
                 "children": [_node_to_dict(c) for c in node.children],
             }
@@ -232,6 +253,7 @@ class MindTree:
                 depth=d["depth"],
                 hidden=d.get("hidden", False),
                 has_question=d.get("has_question", False),
+                focused=d.get("focused", False),
                 archived=d.get("archived", False),
                 archive_reason=d.get("archive_reason", ""),
             )
@@ -295,11 +317,13 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
             raise ValueError(msg)
 
         has_question = False
+        focused = False
         hidden = False
         archived = False
         archive_reason = ""
 
         question_m = QUESTION_RE.match(stripped)
+        focus_m = FOCUS_RE.match(stripped)
         hide_m = HIDE_RE.match(stripped)
         arc_reason_m = ARCHIVE_REASON_RE.match(stripped)
         arc_m = ARCHIVE_RE.match(stripped)
@@ -310,6 +334,11 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
             author = "agent" if tag in ("[*]", "🤖") else "user"
             has_question = author == "user"
             content = stripped[question_m.end() :].strip()
+        elif focus_m:
+            tag = focus_m.group(1)
+            author = "agent" if tag in ("[*]", "🤖") else "user"
+            focused = True
+            content = stripped[focus_m.end() :].strip()
         elif hide_m:
             tag = hide_m.group(1)
             author = "agent" if tag in ("[*]", "🤖") else "user"
@@ -362,6 +391,7 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
             "depth": depth,
             "hidden": hidden,
             "has_question": has_question,
+            "focused": focused,
             "archived": archived,
             "archive_reason": archive_reason,
         }
@@ -382,14 +412,21 @@ def _parse_block(block: str) -> MindTree:  # noqa: PLR0912, PLR0915
 
 
 def serialize_mindmap(tree: MindTree) -> str:
-    """Serialize tree to ```agentsmindmap block. Hidden/archived: collapsed."""
+    """Serialize tree to ```agentsmindmap block. Hidden/archived: collapsed.
+    If a node has [focus], serializes only the focused subtree.
+    """
+
+    focus = tree.focused_node
 
     def _walk(node: MindNode, depth: int, lines: list[str]) -> None:
-        if node is tree.root:
-            lines.append(f"root: {node.content}")
+        if node is tree.root or (focus is not None and node is focus):
+            label = f"[focus] {node.content}" if node.focused else node.content
+            lines.append(f"root: {label}")
         else:
             indent = "  " * (depth - 1)
             tag = "👤❓" if node.has_question else ("👤" if node.is_user else "🤖")
+            if node.focused:
+                tag = f"{tag}[focus]"
             if node.archived:
                 reason = node.archive_reason
                 tag = f"{tag}[archive{f': {reason}' if reason else ''}]"
@@ -409,7 +446,10 @@ def serialize_mindmap(tree: MindTree) -> str:
             _walk(child, depth + 1, lines)
 
     lines: list[str] = []
-    _walk(tree.root, 0, lines)
+    if focus is not None:
+        _walk(focus, 0, lines)
+    else:
+        _walk(tree.root, 0, lines)
     body = "\n".join(lines)
     return f"{BLOCK_START}\n{body}\n{BLOCK_END}\n"
 
@@ -434,6 +474,7 @@ def merge_md_into_graph(graph: MindTree, md_tree: MindTree) -> MindTree:
             g.hidden = m.hidden
             g.archived = m.archived
             g.has_question = m.has_question
+            g.focused = m.focused
             g.archive_reason = m.archive_reason
 
             g_children_by_uuid = {c.uuid: c for c in g.children}
@@ -491,6 +532,8 @@ def _copy_node(node: MindNode) -> MindNode:
         author=node.author,
         depth=node.depth,
         hidden=node.hidden,
+        has_question=node.has_question,
+        focused=node.focused,
         archived=node.archived,
         archive_reason=node.archive_reason,
     )
@@ -530,7 +573,7 @@ def diff_trees(old: MindTree, new: MindTree) -> tuple[bool, str]:
             return
         if n is None or o is None:
             return
-        if o.content != n.content or o.has_question != n.has_question:
+        if o.content != n.content or o.has_question != n.has_question or o.focused != n.focused:
             changed.append(f"  [{n.id}] changed: {o.content[:60]!r} → {n.content[:60]!r}")
         if o.hidden and not n.hidden:
             unhidden.append(f"  [{n.id}] unhidden: {n.content[:60]}")
@@ -590,13 +633,21 @@ def render_mermaid(tree: MindTree) -> str:
                 marker = "📦"
             else:
                 marker = "👤❓" if node.has_question else ("👤" if node.is_user else "🤖")
-            lines.append(f"  {indent}{marker} {_sanitize(node.content)}")
+            focus_mark = " 🎯" if node.focused else ""
+            lines.append(f"  {indent}{marker}{focus_mark} {_sanitize(node.content)}")
         if node.hidden or node.archived:
             return
         for child in node.children:
             _walk(child, indent + "  ")
 
-    _walk(tree.root, "")
+    focus = tree.focused_node
+    if focus is not None:
+        lines = ["```mermaid", "mindmap"]
+        lines.append(f"  {_sanitize(focus.content)}")
+        for child in focus.children:
+            _walk(child, "  ")
+    else:
+        _walk(tree.root, "")
     lines.append("```")
     return "\n".join(lines)
 
